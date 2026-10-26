@@ -1,5 +1,5 @@
 use std::fmt::Display;
-use std::io::{self, Stdout, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -20,7 +20,7 @@ use thiserror::Error;
 use which::which;
 
 use crate::app::CopyField;
-use crate::bw::VaultItem;
+use crate::rbw::VaultItem;
 
 #[derive(Debug, Error)]
 pub enum TuiError {
@@ -43,7 +43,7 @@ pub enum TuiError {
     #[error("{command} failed: {stderr}")]
     CommandFailed { command: String, stderr: String },
 
-    #[error("{command} failed with status {status}")]
+    #[error("{command} failed ({status})")]
     CommandFailedStatus { command: String, status: String },
 
     #[error("{command} returned non-UTF8 output")]
@@ -101,17 +101,22 @@ enum KeyOutcome {
     Confirm(PendingAction),
 }
 
-pub fn run_picker<F, E>(
+/// `is_locked` is checked before each `fetch`; a locked vault makes `fetch` prompt through
+/// pinentry, so the terminal is handed back for the duration of that call.
+pub fn run_picker<L, F, E>(
     items: &[VaultItem],
+    fzf: FzfFilter,
     config: PickerConfig,
+    mut is_locked: L,
     mut fetch: F,
 ) -> Result<PickerOutcome>
 where
+    L: FnMut() -> bool,
     F: FnMut(&VaultItem, CopyField) -> std::result::Result<String, E>,
     E: Display,
 {
     let mut terminal = TerminalGuard::enter()?;
-    let mut app = PickerApp::new(items, config)?;
+    let mut app = PickerApp::new(items, fzf, config)?;
 
     loop {
         terminal.draw(|frame| app.draw(frame))?;
@@ -132,7 +137,9 @@ where
             KeyOutcome::Continue => {}
             KeyOutcome::Cancel => return Ok(PickerOutcome::Cancelled),
             KeyOutcome::Confirm(pending) => match items.get(pending.index) {
-                Some(item) => match fetch(item, pending.action) {
+                Some(item) => match fetch_with_terminal(&mut terminal, &mut is_locked, || {
+                    fetch(item, pending.action)
+                })? {
                     Ok(value) => {
                         return Ok(PickerOutcome::Selected {
                             value,
@@ -147,12 +154,12 @@ where
     }
 }
 
-struct FzfFilter {
+pub struct FzfFilter {
     program: PathBuf,
 }
 
 impl FzfFilter {
-    fn new() -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let program = which("fzf").map_err(|_| TuiError::MissingFzf)?;
 
         Ok(Self { program })
@@ -179,6 +186,8 @@ impl FzfFilter {
             .arg("\t")
             .arg("--nth")
             .arg("2..")
+            .env_remove("FZF_DEFAULT_OPTS")
+            .env_remove("FZF_DEFAULT_OPTS_FILE")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -228,17 +237,36 @@ impl FzfFilter {
     }
 }
 
+// The UI is drawn on the terminal itself so stdout stays free for `--print` in pipes.
+#[cfg(unix)]
+type TerminalOutput = std::fs::File;
+#[cfg(not(unix))]
+type TerminalOutput = io::Stderr;
+
+#[cfg(unix)]
+fn open_terminal_output() -> io::Result<TerminalOutput> {
+    std::fs::OpenOptions::new().write(true).open("/dev/tty")
+}
+
+#[cfg(not(unix))]
+fn open_terminal_output() -> io::Result<TerminalOutput> {
+    Ok(io::stderr())
+}
+
 struct TerminalGuard {
-    terminal: Terminal<CrosstermBackend<Stdout>>,
+    terminal: Terminal<CrosstermBackend<TerminalOutput>>,
 }
 
 impl TerminalGuard {
     fn enter() -> Result<Self> {
+        let mut terminal = Terminal::new(CrosstermBackend::new(open_terminal_output()?))?;
         enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
-        let backend = CrosstermBackend::new(stdout);
-        let terminal = Terminal::new(backend)?;
+
+        if let Err(error) = execute!(terminal.backend_mut(), EnterAlternateScreen) {
+            let _ = disable_raw_mode();
+            return Err(error.into());
+        }
+
         Ok(Self { terminal })
     }
 
@@ -249,6 +277,35 @@ impl TerminalGuard {
         self.terminal.draw(render)?;
         Ok(())
     }
+
+    fn suspend(&mut self) -> Result<()> {
+        disable_raw_mode()?;
+        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+        self.terminal.show_cursor()?;
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<()> {
+        enable_raw_mode()?;
+        execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
+        self.terminal.clear()?;
+        Ok(())
+    }
+}
+
+fn fetch_with_terminal<T>(
+    terminal: &mut TerminalGuard,
+    is_locked: &mut impl FnMut() -> bool,
+    fetch: impl FnOnce() -> T,
+) -> Result<T> {
+    if !is_locked() {
+        return Ok(fetch());
+    }
+
+    terminal.suspend()?;
+    let value = fetch();
+    terminal.resume()?;
+    Ok(value)
 }
 
 impl Drop for TerminalGuard {
@@ -277,7 +334,7 @@ impl SearchInput {
     }
 
     fn cursor_column(&self) -> u16 {
-        self.text[..self.cursor].chars().count() as u16
+        Span::raw(&self.text[..self.cursor]).width() as u16
     }
 
     fn insert(&mut self, ch: char) {
@@ -389,13 +446,13 @@ struct PickerApp<'a> {
     fzf: FzfFilter,
     filtered: Vec<usize>,
     selected: usize,
+    list_state: ListState,
     status: String,
     search_area: Option<Rect>,
 }
 
 impl<'a> PickerApp<'a> {
-    fn new(items: &'a [VaultItem], config: PickerConfig) -> Result<Self> {
-        let fzf = FzfFilter::new()?;
+    fn new(items: &'a [VaultItem], fzf: FzfFilter, config: PickerConfig) -> Result<Self> {
         let input = SearchInput::new(config.initial_query);
         let filtered = fzf.filter(items, input.text().trim())?;
         let status = config
@@ -410,6 +467,7 @@ impl<'a> PickerApp<'a> {
             fzf,
             filtered,
             selected: 0,
+            list_state: ListState::default(),
             status,
             search_area: None,
         })
@@ -445,7 +503,7 @@ impl<'a> PickerApp<'a> {
                     self.refresh()?;
                 }
             }
-            KeyCode::Char(ch) => {
+            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::ALT) => {
                 self.input.insert(ch);
                 self.refresh()?;
             }
@@ -458,7 +516,7 @@ impl<'a> PickerApp<'a> {
     fn handle_control_key(&mut self, key: KeyEvent) -> Result<KeyOutcome> {
         match key.code {
             KeyCode::Char('c') => return Ok(KeyOutcome::Cancel),
-            KeyCode::Char('l') | KeyCode::Char('\u{0c}') => {
+            KeyCode::Char('l') => {
                 if self.input.clear() {
                     self.refresh()?;
                 }
@@ -532,6 +590,7 @@ impl<'a> PickerApp<'a> {
         } else {
             self.selected = self.selected.min(self.filtered.len() - 1);
         }
+        *self.list_state.offset_mut() = 0;
         self.status = default_status(&self.filtered, query);
 
         Ok(())
@@ -554,16 +613,15 @@ impl<'a> PickerApp<'a> {
                 Constraint::Length(4),
                 Constraint::Length(3),
                 Constraint::Min(10),
-                Constraint::Length(8),
-                Constraint::Length(2),
+                Constraint::Length(1),
             ])
             .split(frame.area());
 
-        let header_chip_label = self.fixed_action.map(|f| f.label()).unwrap_or("password");
+        let action_label = self.fixed_action.map(|f| f.label()).unwrap_or("password");
 
         let header = Paragraph::new(vec![
             Line::from(vec![
-                Span::styled(" 󰌾 ", Style::default().fg(Color::Yellow)),
+                Span::raw(" "),
                 Span::styled(
                     "Bitwarden TUI",
                     Style::default()
@@ -574,7 +632,9 @@ impl<'a> PickerApp<'a> {
                 Span::styled("fast vault access", Style::default().fg(Color::Gray)),
             ]),
             Line::from(vec![
-                shortcut_chip("Enter", header_chip_label),
+                shortcut_chip("Enter", action_label),
+                Span::raw(" "),
+                shortcut_chip("Ctrl-P", "pass"),
                 Span::raw(" "),
                 shortcut_chip("Ctrl-U", "user"),
                 Span::raw(" "),
@@ -597,7 +657,10 @@ impl<'a> PickerApp<'a> {
         let search_area = outer[1];
         self.search_area = Some(search_area);
 
-        let search = Paragraph::new(self.input.text()).block(
+        let cursor_column = self.input.cursor_column();
+        let scroll = cursor_column.saturating_sub(search_area.width.saturating_sub(3));
+
+        let search = Paragraph::new(self.input.text()).scroll((0, scroll)).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_set(border::ROUNDED)
@@ -607,7 +670,7 @@ impl<'a> PickerApp<'a> {
         );
         frame.render_widget(search, search_area);
 
-        let cursor_x = search_area.x + 1 + self.input.cursor_column();
+        let cursor_x = search_area.x + 1 + cursor_column - scroll;
         let cursor_y = search_area.y + 1;
         frame.set_cursor_position(Position::new(cursor_x, cursor_y));
 
@@ -625,12 +688,9 @@ impl<'a> PickerApp<'a> {
                 .collect::<Vec<_>>()
         };
 
-        let mut state = ListState::default();
-        if !self.filtered.is_empty() {
-            state.select(Some(self.selected));
-        }
+        self.list_state
+            .select((!self.filtered.is_empty()).then_some(self.selected));
 
-        let action_label = self.fixed_action.map(|f| f.label()).unwrap_or("password");
         let list_title = format!(
             " Credentials · Enter {} {} ",
             self.verb.descriptive(),
@@ -652,11 +712,15 @@ impl<'a> PickerApp<'a> {
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("❯ ");
-        frame.render_stateful_widget(list, middle[0], &mut state);
+        frame.render_stateful_widget(list, middle[0], &mut self.list_state);
 
+        let help_lines = render_help(action_label, self.verb);
         let right = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(8), Constraint::Length(8)])
+            .constraints([
+                Constraint::Min(8),
+                Constraint::Length(help_lines.len() as u16 + 2),
+            ])
             .split(middle[1]);
 
         let details = Paragraph::new(render_details(
@@ -674,7 +738,7 @@ impl<'a> PickerApp<'a> {
         .wrap(Wrap { trim: true });
         frame.render_widget(details, right[0]);
 
-        let help = Paragraph::new(render_help(self.fixed_action, self.verb))
+        let help = Paragraph::new(help_lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -718,31 +782,19 @@ fn searchable_text(item: &VaultItem) -> String {
         sanitize_inline(&item.name),
         sanitize_inline(item.username().unwrap_or_default()),
         sanitize_inline(item.first_uri().unwrap_or_default()),
-        sanitize_inline(item.notes.as_deref().unwrap_or_default()),
+        sanitize_inline(item.folder().unwrap_or_default()),
     )
 }
 
 fn render_list_item(item: &VaultItem) -> ListItem<'static> {
-    let mut top = Vec::new();
-    if item.favorite {
-        top.push(Span::styled("★ ", Style::default().fg(Color::Yellow)));
-    }
-    top.push(Span::styled(
+    let mut top = vec![Span::styled(
         item.name.clone(),
         Style::default().add_modifier(Modifier::BOLD),
-    ));
-
-    let mut flags = Vec::new();
-    if item.has_totp() {
-        flags.push("totp");
-    }
-    if item.has_notes() {
-        flags.push("notes");
-    }
-    if !flags.is_empty() {
+    )];
+    if let Some(folder) = item.folder() {
         top.push(Span::raw("  "));
         top.push(Span::styled(
-            format!("[{}]", flags.join(", ")),
+            format!("[{folder}]"),
             Style::default().fg(Color::Magenta),
         ));
     }
@@ -773,19 +825,12 @@ fn render_details(
         return vec![Line::from("No item selected")];
     };
 
-    let notes = item
-        .notes
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("—");
-
     let default_action = fixed_action.unwrap_or(CopyField::Password);
 
     vec![
         Line::from(vec![
             Span::styled(
-                "Name  ",
+                "Name   ",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -794,7 +839,7 @@ fn render_details(
         ]),
         Line::from(vec![
             Span::styled(
-                "User  ",
+                "User   ",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -803,7 +848,7 @@ fn render_details(
         ]),
         Line::from(vec![
             Span::styled(
-                "URI   ",
+                "URI    ",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -812,34 +857,12 @@ fn render_details(
         ]),
         Line::from(vec![
             Span::styled(
-                "Pass  ",
+                "Folder ",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(if item.password().is_some() {
-                "••••••••"
-            } else {
-                "—"
-            }),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "TOTP  ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(if item.has_totp() { "available" } else { "—" }),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "Notes ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(notes.to_owned()),
+            Span::raw(item.folder().unwrap_or("—").to_owned()),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -854,29 +877,18 @@ fn render_details(
     ]
 }
 
-fn render_help(fixed_action: Option<CopyField>, verb: ActionVerb) -> Vec<Line<'static>> {
-    let verb_str = verb.descriptive();
-    let mut lines = vec![
-        Line::from("↑/↓ move through results"),
-        Line::from("Ctrl-A/E line start/end • Ctrl-W delete word • Ctrl-K kill to end"),
-        Line::from("Backspace/Delete edit • Ctrl-L clear • Esc quits"),
-    ];
-
-    match fixed_action {
-        Some(action) => lines.push(Line::from(format!(
-            "Enter {} {}.",
-            verb_str,
-            action.label()
-        ))),
-        None => lines.extend([
-            Line::from(format!("Enter {} password", verb_str)),
-            Line::from(
-                "Ctrl-U username • Ctrl-T TOTP • Ctrl-O URI • Ctrl-N notes • Ctrl-P password",
-            ),
-        ]),
-    }
-
-    lines
+// Lines stay within 33 columns so the pane does not wrap on an 80-column terminal.
+fn render_help(action_label: &str, verb: ActionVerb) -> Vec<Line<'static>> {
+    vec![
+        Line::from("↑/↓ PgUp/PgDn Home/End move"),
+        Line::from("Ctrl-A/E start/end of query"),
+        Line::from("Ctrl-W/K delete word/to end"),
+        Line::from("Ctrl-L clear • Esc quit"),
+        Line::from(format!("Enter {} {action_label}", verb.descriptive())),
+        Line::from("Ctrl-P password • Ctrl-U user"),
+        Line::from("Ctrl-T TOTP • Ctrl-O URI"),
+        Line::from("Ctrl-N notes"),
+    ]
 }
 
 fn shortcut_chip<'a>(key: &'a str, description: &'a str) -> Span<'a> {
@@ -902,26 +914,27 @@ fn sanitize_inline(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{FzfFilter, SearchInput, searchable_text};
-    use crate::bw::{Login, LoginUri, VaultItem};
+    use crate::rbw::VaultItem;
+
+    fn item(id: &str, name: &str, username: &str, uri: &str, folder: Option<&str>) -> VaultItem {
+        VaultItem {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            username: Some(username.to_owned()),
+            folder: folder.map(ToOwned::to_owned),
+            uris: vec![uri.to_owned()],
+        }
+    }
 
     #[test]
     fn searchable_text_includes_main_fields() {
-        let item = VaultItem {
-            id: "1".to_owned(),
-            name: "GitHub".to_owned(),
-            notes: Some("personal".to_owned()),
-            favorite: false,
-            login: Some(Login {
-                username: Some("octocat".to_owned()),
-                password: Some("secret".to_owned()),
-                totp: None,
-                uris: vec![LoginUri {
-                    uri: Some("https://github.com".to_owned()),
-                }],
-            }),
-        };
-
-        let text = searchable_text(&item);
+        let text = searchable_text(&item(
+            "1",
+            "GitHub",
+            "octocat",
+            "https://github.com",
+            Some("personal"),
+        ));
         assert!(text.contains("GitHub"));
         assert!(text.contains("octocat"));
         assert!(text.contains("https://github.com"));
@@ -935,40 +948,11 @@ mod tests {
         };
 
         let items = vec![
-            VaultItem {
-                id: "1".to_owned(),
-                name: "GitHub".to_owned(),
-                notes: Some("code hosting".to_owned()),
-                favorite: false,
-                login: Some(Login {
-                    username: Some("octocat".to_owned()),
-                    password: Some("secret".to_owned()),
-                    totp: None,
-                    uris: vec![LoginUri {
-                        uri: Some("https://github.com".to_owned()),
-                    }],
-                }),
-            },
-            VaultItem {
-                id: "2".to_owned(),
-                name: "GitLab".to_owned(),
-                notes: Some("another forge".to_owned()),
-                favorite: false,
-                login: Some(Login {
-                    username: Some("tanuki".to_owned()),
-                    password: Some("secret".to_owned()),
-                    totp: None,
-                    uris: vec![LoginUri {
-                        uri: Some("https://gitlab.com".to_owned()),
-                    }],
-                }),
-            },
+            item("1", "GitHub", "octocat", "https://github.com", None),
+            item("2", "GitLab", "tanuki", "https://gitlab.com", None),
         ];
 
-        let matches = match filter.filter(&items, "hub") {
-            Ok(matches) => matches,
-            Err(_) => return,
-        };
+        let matches = filter.filter(&items, "hub").expect("fzf --filter runs");
         assert_eq!(matches, vec![0]);
     }
 
