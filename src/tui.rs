@@ -20,7 +20,9 @@ use thiserror::Error;
 use which::which;
 
 use crate::app::CopyField;
+use crate::form::{Form, FormOutcome, FormRequest};
 use crate::rbw::{ItemKind, Rbw, RbwError, VaultItem};
+use crate::text_input::TextInput;
 
 #[derive(Debug, Error)]
 pub enum TuiError {
@@ -103,6 +105,8 @@ enum KeyOutcome {
     Confirm(PendingAction),
     SwitchProfile(isize),
     Reload,
+    Edit(usize),
+    SaveForm,
 }
 
 /// Loads `vaults[0]` right away; the other profiles are loaded on first switch.
@@ -180,8 +184,69 @@ where
                 let active = app.active;
                 load_profile(&mut terminal, &mut app, vaults, active, true)?;
             }
+            KeyOutcome::Edit(index) => {
+                let vault = &vaults[app.active];
+                let Some(item) = app.items().get(index).cloned() else {
+                    app.set_error(TuiError::SelectedItemMissing.to_string());
+                    continue;
+                };
+
+                match with_unlocked_terminal(&mut terminal, vault, || vault.get_entry(&item.id))? {
+                    Ok(entry) => app.form = Some(Form::edit(&item, &entry)),
+                    Err(error) => app.set_error(error.to_string()),
+                }
+            }
+            KeyOutcome::SaveForm => {
+                let vault = &vaults[app.active];
+                save_form(&mut terminal, &mut app, vault)?;
+            }
         }
     }
+}
+
+/// Saves the open form through rbw and reloads the active profile on success. Failures stay in
+/// the form so nothing typed is lost.
+fn save_form(terminal: &mut TerminalGuard, app: &mut PickerApp, vault: &Rbw) -> Result<()> {
+    let Some(form) = app.form.as_mut() else {
+        return Ok(());
+    };
+    let Some(request) = form.request() else {
+        form.set_error("A name is required".to_owned());
+        return Ok(());
+    };
+
+    form.set_info("Saving...".to_owned());
+    terminal.draw(|frame| app.draw(frame))?;
+
+    let saved = with_unlocked_terminal(terminal, vault, || match &request {
+        FormRequest::Add(login) => vault.add(login),
+        FormRequest::EditLogin {
+            id,
+            password,
+            notes,
+        } => vault.edit_login(id, password, notes),
+        FormRequest::EditNote { id, notes } => vault.edit_note(id, notes),
+    })?;
+
+    if let Err(error) = saved {
+        if let Some(form) = app.form.as_mut() {
+            form.set_error(error.to_string());
+        }
+        return Ok(());
+    }
+
+    app.form = None;
+    let active = app.active;
+    match vault.load(false) {
+        Ok(items) => {
+            app.store(active, items);
+            app.activate(active)?;
+            app.set_status("Saved".to_owned());
+        }
+        Err(error) => app.set_error(error.to_string()),
+    }
+
+    Ok(())
 }
 
 pub struct FzfFilter {
@@ -380,133 +445,11 @@ impl Drop for TerminalGuard {
     }
 }
 
-#[derive(Debug, Clone)]
-struct SearchInput {
-    text: String,
-    cursor: usize,
-}
-
-impl SearchInput {
-    fn new(initial: impl Into<String>) -> Self {
-        let text = initial.into();
-        let cursor = text.len();
-        Self { text, cursor }
-    }
-
-    fn text(&self) -> &str {
-        &self.text
-    }
-
-    fn cursor_column(&self) -> u16 {
-        Span::raw(&self.text[..self.cursor]).width() as u16
-    }
-
-    fn insert(&mut self, ch: char) {
-        self.text.insert(self.cursor, ch);
-        self.cursor += ch.len_utf8();
-    }
-
-    fn delete_before(&mut self) -> bool {
-        if self.cursor == 0 {
-            return false;
-        }
-        let prev = self.prev_boundary(self.cursor);
-        self.text.replace_range(prev..self.cursor, "");
-        self.cursor = prev;
-        true
-    }
-
-    fn delete_at(&mut self) -> bool {
-        if self.cursor >= self.text.len() {
-            return false;
-        }
-        let next = self.next_boundary(self.cursor);
-        self.text.replace_range(self.cursor..next, "");
-        true
-    }
-
-    fn delete_word_before(&mut self) -> bool {
-        if self.cursor == 0 {
-            return false;
-        }
-        let chars: Vec<(usize, char)> = self.text[..self.cursor].char_indices().collect();
-        let mut start = self.cursor;
-        let mut i = chars.len();
-        while i > 0 && chars[i - 1].1.is_whitespace() {
-            start = chars[i - 1].0;
-            i -= 1;
-        }
-        while i > 0 && !chars[i - 1].1.is_whitespace() {
-            start = chars[i - 1].0;
-            i -= 1;
-        }
-        if start == self.cursor {
-            return false;
-        }
-        self.text.replace_range(start..self.cursor, "");
-        self.cursor = start;
-        true
-    }
-
-    fn kill_to_end(&mut self) -> bool {
-        if self.cursor >= self.text.len() {
-            return false;
-        }
-        self.text.truncate(self.cursor);
-        true
-    }
-
-    fn move_left(&mut self) {
-        if self.cursor > 0 {
-            self.cursor = self.prev_boundary(self.cursor);
-        }
-    }
-
-    fn move_right(&mut self) {
-        if self.cursor < self.text.len() {
-            self.cursor = self.next_boundary(self.cursor);
-        }
-    }
-
-    fn move_start(&mut self) {
-        self.cursor = 0;
-    }
-
-    fn move_end(&mut self) {
-        self.cursor = self.text.len();
-    }
-
-    fn clear(&mut self) -> bool {
-        if self.text.is_empty() && self.cursor == 0 {
-            return false;
-        }
-        self.text.clear();
-        self.cursor = 0;
-        true
-    }
-
-    fn prev_boundary(&self, idx: usize) -> usize {
-        self.text[..idx]
-            .char_indices()
-            .next_back()
-            .map(|(i, _)| i)
-            .unwrap_or(0)
-    }
-
-    fn next_boundary(&self, idx: usize) -> usize {
-        self.text[idx..]
-            .chars()
-            .next()
-            .map(|c| idx + c.len_utf8())
-            .unwrap_or_else(|| self.text.len())
-    }
-}
-
 struct PickerApp {
     profile_names: Vec<String>,
     loaded: Vec<Option<Vec<VaultItem>>>,
     active: usize,
-    input: SearchInput,
+    input: TextInput,
     fixed_action: Option<CopyField>,
     verb: ActionVerb,
     fzf: FzfFilter,
@@ -516,6 +459,7 @@ struct PickerApp {
     status: String,
     status_is_error: bool,
     search_area: Option<Rect>,
+    form: Option<Form>,
 }
 
 impl PickerApp {
@@ -526,7 +470,7 @@ impl PickerApp {
             profile_names,
             loaded,
             active: 0,
-            input: SearchInput::new(config.initial_query),
+            input: TextInput::new(config.initial_query),
             fixed_action: config.fixed_action,
             verb: config.verb,
             fzf,
@@ -536,10 +480,41 @@ impl PickerApp {
             status: String::new(),
             status_is_error: false,
             search_area: None,
+            form: None,
         }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<KeyOutcome> {
+        if let Some(form) = self.form.as_mut() {
+            return Ok(match form.handle_key(key) {
+                FormOutcome::Continue => KeyOutcome::Continue,
+                FormOutcome::Cancel => {
+                    self.form = None;
+                    KeyOutcome::Continue
+                }
+                FormOutcome::Submit => KeyOutcome::SaveForm,
+            });
+        }
+
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            match key.code {
+                KeyCode::Char('n') => {
+                    self.form = Some(Form::new_login());
+                    return Ok(KeyOutcome::Continue);
+                }
+                KeyCode::Char('e') => {
+                    return Ok(match self.filtered.get(self.selected).copied() {
+                        Some(index) => KeyOutcome::Edit(index),
+                        None => {
+                            self.set_error("No item selected to edit".to_owned());
+                            KeyOutcome::Continue
+                        }
+                    });
+                }
+                _ => {}
+            }
+        }
+
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return self.handle_control_key(key);
         }
@@ -883,6 +858,10 @@ impl PickerApp {
             ),
         ]));
         frame.render_widget(footer, outer[3]);
+
+        if let Some(form) = &self.form {
+            form.draw(frame);
+        }
     }
 }
 
@@ -1022,6 +1001,7 @@ fn render_help(
         Line::from("Alt-Backspace delete word"),
         Line::from("Ctrl-K kill to end • Ctrl-L clear"),
         Line::from("Ctrl-R sync and reload"),
+        Line::from("Alt-N new login • Alt-E edit"),
         Line::from("Esc clear query, then quit"),
         Line::from(format!("Enter {} {action_label}", verb.descriptive())),
         Line::from("Ctrl-P password • Ctrl-U user"),
@@ -1057,7 +1037,7 @@ fn sanitize_inline(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FzfFilter, SearchInput, searchable_text};
+    use super::{FzfFilter, searchable_text};
     use crate::rbw::{ItemKind, VaultItem};
 
     fn item(id: &str, name: &str, username: &str, uri: &str, folder: Option<&str>) -> VaultItem {
@@ -1099,93 +1079,5 @@ mod tests {
 
         let matches = filter.filter(&items, "hub").expect("fzf --filter runs");
         assert_eq!(matches, vec![0]);
-    }
-
-    #[test]
-    fn search_input_insert_appends_and_advances_cursor() {
-        let mut input = SearchInput::new("");
-        input.insert('h');
-        input.insert('i');
-        assert_eq!(input.text(), "hi");
-        assert_eq!(input.cursor_column(), 2);
-    }
-
-    #[test]
-    fn search_input_initial_cursor_is_at_end() {
-        let input = SearchInput::new("abc");
-        assert_eq!(input.cursor_column(), 3);
-    }
-
-    #[test]
-    fn search_input_backspace_removes_char_before_cursor() {
-        let mut input = SearchInput::new("hi");
-        assert!(input.delete_before());
-        assert_eq!(input.text(), "h");
-        assert_eq!(input.cursor_column(), 1);
-    }
-
-    #[test]
-    fn search_input_delete_removes_char_at_cursor() {
-        let mut input = SearchInput::new("hi");
-        input.move_start();
-        assert!(input.delete_at());
-        assert_eq!(input.text(), "i");
-        assert_eq!(input.cursor_column(), 0);
-    }
-
-    #[test]
-    fn search_input_word_delete_removes_last_word_and_trailing_space() {
-        let mut input = SearchInput::new("hello world ");
-        assert!(input.delete_word_before());
-        assert_eq!(input.text(), "hello ");
-    }
-
-    #[test]
-    fn search_input_word_delete_at_start_is_noop() {
-        let mut input = SearchInput::new("hello");
-        input.move_start();
-        assert!(!input.delete_word_before());
-        assert_eq!(input.text(), "hello");
-    }
-
-    #[test]
-    fn search_input_kill_to_end_truncates_from_cursor() {
-        let mut input = SearchInput::new("hello world");
-        input.move_start();
-        for _ in 0..5 {
-            input.move_right();
-        }
-        assert!(input.kill_to_end());
-        assert_eq!(input.text(), "hello");
-    }
-
-    #[test]
-    fn search_input_move_start_and_end_bracket_the_text() {
-        let mut input = SearchInput::new("abc");
-        input.move_start();
-        assert_eq!(input.cursor_column(), 0);
-        input.move_end();
-        assert_eq!(input.cursor_column(), 3);
-    }
-
-    #[test]
-    fn search_input_clear_resets_state() {
-        let mut input = SearchInput::new("abc");
-        assert!(input.clear());
-        assert_eq!(input.text(), "");
-        assert_eq!(input.cursor_column(), 0);
-    }
-
-    #[test]
-    fn search_input_handles_multibyte_chars() {
-        let mut input = SearchInput::new("");
-        input.insert('é');
-        input.insert('a');
-        assert_eq!(input.text(), "éa");
-        assert_eq!(input.cursor_column(), 2);
-        input.move_left();
-        assert_eq!(input.cursor_column(), 1);
-        assert!(input.delete_before());
-        assert_eq!(input.text(), "a");
     }
 }

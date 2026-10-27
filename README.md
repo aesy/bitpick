@@ -82,6 +82,10 @@ The first profile is loaded at startup; the others are unlocked and loaded the f
 **Vault**
 
 - `Ctrl-R`: sync and reload the current profile (also retries after a failed unlock)
+- `Alt-N`: add a new login (name, username, URI, folder, password, notes)
+- `Alt-E`: edit the selected entry. rbw can only change the password and notes of a login, or the text of a secure note. Note lines starting with `#` are dropped by rbw.
+
+In the form: `Tab` / `Shift-Tab` move between fields, `Enter` adds a line in the notes, `Alt-V` shows the password, `Ctrl-S` saves and `Esc` cancels.
 
 **Result navigation**
 

@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -26,6 +27,13 @@ pub enum RbwError {
 
     #[error("{command} failed ({status})")]
     CommandFailedStatus { command: String, status: String },
+
+    #[error("Failed to send input to `{command}`")]
+    WriteInput {
+        command: String,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("{command} returned non-UTF8 output")]
     CommandUtf8 {
@@ -145,6 +153,30 @@ impl Rbw {
         Ok(items)
     }
 
+    pub fn add(&self, login: &NewLogin) -> Result<()> {
+        let mut args = vec!["add", login.name.as_str()];
+        if !login.username.is_empty() {
+            args.push(&login.username);
+        }
+        if !login.uri.is_empty() {
+            args.extend(["--uri", &login.uri]);
+        }
+        if !login.folder.is_empty() {
+            args.extend(["--folder", &login.folder]);
+        }
+
+        self.run_with_input(&args, &login_editor_contents(&login.password, &login.notes))
+    }
+
+    /// Replaces the password and notes of a login; rbw cannot change its other fields.
+    pub fn edit_login(&self, id: &str, password: &str, notes: &str) -> Result<()> {
+        self.run_with_input(&["edit", id], &login_editor_contents(password, notes))
+    }
+
+    pub fn edit_note(&self, id: &str, notes: &str) -> Result<()> {
+        self.run_with_input(&["edit", id], notes)
+    }
+
     pub fn get_entry(&self, id: &str) -> Result<Entry> {
         self.run_json(&["get", "--raw", id])
     }
@@ -158,6 +190,55 @@ impl Rbw {
         serde_json::from_str(&output).map_err(|source| RbwError::JsonCommand {
             command: render_command(args),
             source,
+        })
+    }
+
+    /// Runs an rbw command that would open `$EDITOR`; rbw reads the contents from stdin instead
+    /// when stdin is not a terminal.
+    fn run_with_input(&self, args: &[&str], input: &str) -> Result<()> {
+        let rendered = render_command(args);
+        let mut child = self
+            .command()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|source| RbwError::SpawnCommand {
+                command: rendered.clone(),
+                source,
+            })?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(input.as_bytes())
+                .map_err(|source| RbwError::WriteInput {
+                    command: rendered.clone(),
+                    source,
+                })?;
+        }
+
+        let output = child
+            .wait_with_output()
+            .map_err(|source| RbwError::SpawnCommand {
+                command: rendered.clone(),
+                source,
+            })?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        if stderr.is_empty() {
+            return Err(RbwError::CommandFailedStatus {
+                command: rendered,
+                status: output.status.to_string(),
+            });
+        }
+        Err(RbwError::CommandFailed {
+            command: rendered,
+            stderr,
         })
     }
 
@@ -205,6 +286,11 @@ impl Rbw {
     }
 }
 
+/// rbw's editor format for logins: the password on the first line, the notes after it.
+fn login_editor_contents(password: &str, notes: &str) -> String {
+    format!("{password}\n{notes}\n")
+}
+
 fn render_command(args: &[&str]) -> String {
     format!("rbw {}", args.join(" "))
 }
@@ -222,6 +308,15 @@ struct ListEntry {
     uris: Option<Vec<String>>,
     #[serde(default, rename = "type")]
     entry_type: Option<String>,
+}
+
+pub struct NewLogin {
+    pub name: String,
+    pub username: String,
+    pub uri: String,
+    pub folder: String,
+    pub password: String,
+    pub notes: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
