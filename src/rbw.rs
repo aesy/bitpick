@@ -46,6 +46,10 @@ pub type Result<T> = std::result::Result<T, RbwError>;
 
 const PROFILE_ENV: &str = "RBW_PROFILE";
 
+// rbw forwards these to pinentry. Without them pinentry prompts on the terminal (curses) instead
+// of opening a window.
+const DISPLAY_ENV: [&str; 3] = ["DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE"];
+
 pub struct Rbw {
     program: PathBuf,
     profile: Option<String>,
@@ -92,9 +96,9 @@ impl Rbw {
             .is_ok_and(|status| status.success())
     }
 
-    /// Unlocks the agent if needed. Must run while the terminal is free, since rbw may prompt
-    /// through pinentry on it.
-    fn ensure_unlocked(&self) -> Result<()> {
+    /// Unlocks the agent if needed. Must run while the terminal is free, since pinentry prompts
+    /// on it.
+    pub fn ensure_unlocked(&self) -> Result<()> {
         if self.is_unlocked() {
             return Ok(());
         }
@@ -191,6 +195,9 @@ impl Rbw {
 
     fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
+        for name in DISPLAY_ENV {
+            command.env_remove(name);
+        }
         if let Some(profile) = &self.profile {
             command.env(PROFILE_ENV, profile);
         }

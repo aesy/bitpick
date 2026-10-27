@@ -45,7 +45,7 @@ rbw login
 bitwarden-tui
 ```
 
-If the vault is locked, `rbw unlock` asks for the master password through the configured `pinentry` (`rbw config set pinentry pinentry-gnome3`, `pinentry-curses`, ...). How long the vault stays unlocked is set with `rbw config set lock_timeout <SECS>`. If it locks while the picker is open, the picker steps aside for the prompt and comes back afterwards.
+If the vault is locked, the picker steps aside and `rbw unlock` asks for the master password in the terminal (rbw's configured `pinentry`, in its curses mode), naming the profile being unlocked. How long the vault stays unlocked is set with `rbw config set lock_timeout <SECS>`. This also happens when the vault locks while the picker is open; failures show in the status line.
 
 ### Profiles
 

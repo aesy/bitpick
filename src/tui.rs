@@ -20,7 +20,7 @@ use thiserror::Error;
 use which::which;
 
 use crate::app::CopyField;
-use crate::rbw::{ItemKind, Rbw, VaultItem};
+use crate::rbw::{ItemKind, Rbw, RbwError, VaultItem};
 
 #[derive(Debug, Error)]
 pub enum TuiError {
@@ -114,7 +114,7 @@ pub fn run_picker<F, E>(
 ) -> Result<PickerOutcome>
 where
     F: FnMut(&Rbw, &VaultItem, CopyField) -> std::result::Result<String, E>,
-    E: Display,
+    E: Display + From<RbwError>,
 {
     let sync = config.sync;
     let initial_status = config.initial_status.clone();
@@ -349,21 +349,27 @@ fn load_profile(
     }
 }
 
-/// Runs `op` against `vault`, handing the terminal back first if the vault is locked, since rbw
-/// then prompts through pinentry.
-fn with_unlocked_terminal<T>(
+/// Runs `op` against `vault`. A locked vault is unlocked first with the terminal handed back,
+/// since pinentry prompts on it.
+fn with_unlocked_terminal<T, E>(
     terminal: &mut TerminalGuard,
     vault: &Rbw,
-    op: impl FnOnce() -> T,
-) -> Result<T> {
-    if vault.is_unlocked() {
-        return Ok(op());
+    op: impl FnOnce() -> std::result::Result<T, E>,
+) -> Result<std::result::Result<T, E>>
+where
+    E: From<RbwError>,
+{
+    if !vault.is_unlocked() {
+        terminal.suspend()?;
+        let unlocked = vault.ensure_unlocked();
+        terminal.resume()?;
+
+        if let Err(error) = unlocked {
+            return Ok(Err(error.into()));
+        }
     }
 
-    terminal.suspend()?;
-    let value = op();
-    terminal.resume()?;
-    Ok(value)
+    Ok(op())
 }
 
 impl Drop for TerminalGuard {
