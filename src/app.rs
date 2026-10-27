@@ -23,6 +23,11 @@ pub struct Cli {
     #[arg(long)]
     pub sync: bool,
 
+    /// rbw profile to use (sets `RBW_PROFILE`). Repeat to switch between profiles with Tab;
+    /// an empty name is rbw's default profile.
+    #[arg(long = "profile", value_name = "NAME")]
+    pub profiles: Vec<String>,
+
     /// Print the selected value to stdout instead of copying it.
     #[arg(long)]
     pub print: bool,
@@ -74,18 +79,15 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    let rbw = Rbw::new()?;
+    let vaults = if cli.profiles.is_empty() {
+        vec![Rbw::new(None)?]
+    } else {
+        cli.profiles
+            .iter()
+            .map(|profile| Rbw::new(Some(profile.clone())))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
     let filter = FzfFilter::new()?;
-    rbw.ensure_unlocked()?;
-
-    if cli.sync {
-        rbw.sync()?;
-    }
-
-    let items = rbw.list_login_items()?;
-    if items.is_empty() {
-        return Err(AppError::NoItems);
-    }
 
     let (mut clipboard, initial_status) = if cli.print {
         (None, None)
@@ -103,16 +105,16 @@ pub fn run() -> Result<()> {
     };
 
     let outcome = run_picker(
-        &items,
+        &vaults,
         filter,
         PickerConfig {
             initial_query: cli.query.unwrap_or_default(),
             fixed_action: cli.field,
             initial_status,
             verb,
+            sync: cli.sync,
         },
-        || !rbw.is_unlocked(),
-        |item, action| -> Result<String> { selected_value(&rbw, item, action) },
+        |vault, item, action| -> Result<String> { selected_value(vault, item, action) },
     )?;
 
     match outcome {

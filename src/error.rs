@@ -21,9 +21,6 @@ pub enum AppError {
     #[error("Cancelled")]
     Cancelled,
 
-    #[error("No login items were found in the Bitwarden vault")]
-    NoItems,
-
     #[error("The selected item has no {field}")]
     MissingItemField { field: CopyField },
 }

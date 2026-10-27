@@ -11,8 +11,8 @@ pub enum RbwError {
     #[error("Could not find `rbw` in PATH")]
     MissingProgram,
 
-    #[error("Unlocking the vault with `rbw unlock` failed ({status})")]
-    UnlockFailed { status: String },
+    #[error("Unlocking the vault failed: {reason}")]
+    UnlockFailed { reason: String },
 
     #[error("Failed to run `{command}`")]
     SpawnCommand {
@@ -44,18 +44,46 @@ pub enum RbwError {
 
 pub type Result<T> = std::result::Result<T, RbwError>;
 
+const PROFILE_ENV: &str = "RBW_PROFILE";
+
 pub struct Rbw {
     program: PathBuf,
+    profile: Option<String>,
+    profile_name: String,
 }
 
 impl Rbw {
-    pub fn new() -> Result<Self> {
+    /// `profile` is passed to rbw as `RBW_PROFILE`; `None` keeps the inherited environment.
+    pub fn new(profile: Option<String>) -> Result<Self> {
         let program = which("rbw").map_err(|_| RbwError::MissingProgram)?;
-        Ok(Self { program })
+        let profile_name = profile
+            .clone()
+            .or_else(|| std::env::var(PROFILE_ENV).ok())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "default".to_owned());
+
+        Ok(Self {
+            program,
+            profile,
+            profile_name,
+        })
+    }
+
+    pub fn profile_name(&self) -> &str {
+        &self.profile_name
+    }
+
+    /// Unlocks if needed, optionally syncs, and lists the login items.
+    pub fn load(&self, sync: bool) -> Result<Vec<VaultItem>> {
+        self.ensure_unlocked()?;
+        if sync {
+            self.sync()?;
+        }
+        self.list_items()
     }
 
     pub fn is_unlocked(&self) -> bool {
-        Command::new(&self.program)
+        self.command()
             .arg("unlocked")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -66,39 +94,48 @@ impl Rbw {
 
     /// Unlocks the agent if needed. Must run while the terminal is free, since rbw may prompt
     /// through pinentry on it.
-    pub fn ensure_unlocked(&self) -> Result<()> {
+    fn ensure_unlocked(&self) -> Result<()> {
         if self.is_unlocked() {
             return Ok(());
         }
 
-        let status = Command::new(&self.program)
+        // rbw hands its stdin tty to pinentry, so stdin stays inherited.
+        let output = self
+            .command()
             .arg("unlock")
-            .status()
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
             .map_err(|source| RbwError::SpawnCommand {
                 command: "rbw unlock".to_owned(),
                 source,
             })?;
 
-        if !status.success() {
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
             return Err(RbwError::UnlockFailed {
-                status: status.to_string(),
+                reason: if stderr.is_empty() {
+                    output.status.to_string()
+                } else {
+                    stderr
+                },
             });
         }
 
         Ok(())
     }
 
-    pub fn sync(&self) -> Result<()> {
+    fn sync(&self) -> Result<()> {
         self.run_capture(&["sync"]).map(|_| ())
     }
 
-    pub fn list_login_items(&self) -> Result<Vec<VaultItem>> {
+    fn list_items(&self) -> Result<Vec<VaultItem>> {
         let entries: Vec<ListEntry> = self.run_json(&["list", "--raw"])?;
 
         let mut items: Vec<VaultItem> = entries
             .into_iter()
-            .filter(|entry| entry.entry_type.as_deref() == Some("Login"))
-            .map(VaultItem::from)
+            .filter_map(VaultItem::from_entry)
             .collect();
         items.sort_by_cached_key(|item| item.name.to_lowercase());
         Ok(items)
@@ -122,7 +159,8 @@ impl Rbw {
 
     fn run_capture(&self, args: &[&str]) -> Result<String> {
         let rendered = render_command(args);
-        let output = Command::new(&self.program)
+        let output = self
+            .command()
             .args(args)
             .stdin(Stdio::null())
             .output()
@@ -150,6 +188,14 @@ impl Rbw {
             source,
         })
     }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        if let Some(profile) = &self.profile {
+            command.env(PROFILE_ENV, profile);
+        }
+        command
+    }
 }
 
 fn render_command(args: &[&str]) -> String {
@@ -171,28 +217,41 @@ struct ListEntry {
     entry_type: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemKind {
+    Login,
+    Note,
+}
+
 #[derive(Clone)]
 pub struct VaultItem {
     pub id: String,
+    pub kind: ItemKind,
     pub name: String,
     pub username: Option<String>,
     pub folder: Option<String>,
     pub uris: Vec<String>,
 }
 
-impl From<ListEntry> for VaultItem {
-    fn from(entry: ListEntry) -> Self {
-        Self {
+impl VaultItem {
+    /// `None` for entry types the picker does not offer (cards, identities, SSH keys).
+    fn from_entry(entry: ListEntry) -> Option<Self> {
+        let kind = match entry.entry_type.as_deref()? {
+            "Login" => ItemKind::Login,
+            "Note" => ItemKind::Note,
+            _ => return None,
+        };
+
+        Some(Self {
             id: entry.id,
+            kind,
             name: entry.name.unwrap_or_default(),
             username: entry.user,
             folder: entry.folder,
             uris: entry.uris.unwrap_or_default(),
-        }
+        })
     }
-}
 
-impl VaultItem {
     pub fn username(&self) -> Option<&str> {
         self.username.as_deref().filter(|value| !value.is_empty())
     }
@@ -209,10 +268,12 @@ impl VaultItem {
     }
 }
 
-/// One entry from `rbw get --raw`. Only login entries are fetched, so `data` is login data.
+/// One entry from `rbw get --raw`. Only logins and secure notes are fetched; a note's `data`
+/// is `null`.
 #[derive(Deserialize)]
 pub struct Entry {
-    data: LoginData,
+    #[serde(default)]
+    data: Option<LoginData>,
     #[serde(default)]
     notes: Option<String>,
 }
@@ -228,6 +289,7 @@ struct LoginData {
 impl Entry {
     pub fn password(&self) -> Option<&str> {
         self.data
+            .as_ref()?
             .password
             .as_deref()
             .filter(|value| !value.is_empty())
@@ -235,8 +297,8 @@ impl Entry {
 
     pub fn has_totp(&self) -> bool {
         self.data
-            .totp
-            .as_deref()
+            .as_ref()
+            .and_then(|data| data.totp.as_deref())
             .is_some_and(|value| !value.is_empty())
     }
 
@@ -250,22 +312,29 @@ impl Entry {
 
 #[cfg(test)]
 mod tests {
-    use super::{Entry, ListEntry, VaultItem};
+    use super::{Entry, ItemKind, ListEntry, VaultItem};
 
     #[test]
     fn parses_rbw_list_raw_output() {
         let json = r#"[
             {"id": "a", "name": "GitHub", "user": "octocat", "folder": null,
              "uris": ["", "https://github.com"], "type": "Login"},
-            {"id": "b", "name": null, "user": null, "folder": "Cards", "uris": null, "type": "Card"}
+            {"id": "b", "name": null, "user": null, "folder": "Private", "uris": null, "type": "Note"},
+            {"id": "c", "name": "Visa", "user": null, "folder": null, "uris": null, "type": "Card"}
         ]"#;
         let entries: Vec<ListEntry> = serde_json::from_str(json).unwrap();
-        let items: Vec<VaultItem> = entries.into_iter().map(VaultItem::from).collect();
+        let items: Vec<VaultItem> = entries
+            .into_iter()
+            .filter_map(VaultItem::from_entry)
+            .collect();
 
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind, ItemKind::Login);
         assert_eq!(items[0].username(), Some("octocat"));
         assert_eq!(items[0].first_uri(), Some("https://github.com"));
+        assert_eq!(items[1].kind, ItemKind::Note);
         assert_eq!(items[1].name, "");
-        assert_eq!(items[1].folder(), Some("Cards"));
+        assert_eq!(items[1].folder(), Some("Private"));
         assert_eq!(items[1].first_uri(), None);
     }
 
@@ -282,6 +351,17 @@ mod tests {
         assert_eq!(entry.password(), Some("secret"));
         assert!(entry.has_totp());
         assert_eq!(entry.notes(), Some("recovery codes"));
+    }
+
+    #[test]
+    fn parses_rbw_get_raw_secure_note() {
+        let json = r#"{"id": "b", "folder": null, "name": "Wifi", "data": null,
+                       "fields": [], "notes": "pw: hunter2", "history": []}"#;
+        let entry: Entry = serde_json::from_str(json).unwrap();
+
+        assert_eq!(entry.password(), None);
+        assert!(!entry.has_totp());
+        assert_eq!(entry.notes(), Some("pw: hunter2"));
     }
 
     #[test]

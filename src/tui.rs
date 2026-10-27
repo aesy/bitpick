@@ -20,7 +20,7 @@ use thiserror::Error;
 use which::which;
 
 use crate::app::CopyField;
-use crate::rbw::VaultItem;
+use crate::rbw::{ItemKind, Rbw, VaultItem};
 
 #[derive(Debug, Error)]
 pub enum TuiError {
@@ -82,6 +82,8 @@ pub struct PickerConfig {
     pub fixed_action: Option<CopyField>,
     pub initial_status: Option<String>,
     pub verb: ActionVerb,
+    /// Sync each profile before its items are first loaded.
+    pub sync: bool,
 }
 
 pub enum PickerOutcome {
@@ -99,24 +101,35 @@ enum KeyOutcome {
     Continue,
     Cancel,
     Confirm(PendingAction),
+    SwitchProfile(isize),
+    Reload,
 }
 
-/// `is_locked` is checked before each `fetch`; a locked vault makes `fetch` prompt through
-/// pinentry, so the terminal is handed back for the duration of that call.
-pub fn run_picker<L, F, E>(
-    items: &[VaultItem],
+/// Loads `vaults[0]` right away; the other profiles are loaded on first switch.
+pub fn run_picker<F, E>(
+    vaults: &[Rbw],
     fzf: FzfFilter,
     config: PickerConfig,
-    mut is_locked: L,
     mut fetch: F,
 ) -> Result<PickerOutcome>
 where
-    L: FnMut() -> bool,
-    F: FnMut(&VaultItem, CopyField) -> std::result::Result<String, E>,
+    F: FnMut(&Rbw, &VaultItem, CopyField) -> std::result::Result<String, E>,
     E: Display,
 {
+    let sync = config.sync;
+    let initial_status = config.initial_status.clone();
+    let profile_names = vaults
+        .iter()
+        .map(|vault| vault.profile_name().to_owned())
+        .collect();
     let mut terminal = TerminalGuard::enter()?;
-    let mut app = PickerApp::new(items, fzf, config)?;
+    let mut app = PickerApp::new(profile_names, fzf, config);
+
+    if load_profile(&mut terminal, &mut app, vaults, 0, sync)?
+        && let Some(status) = initial_status
+    {
+        app.set_error(status);
+    }
 
     loop {
         terminal.draw(|frame| app.draw(frame))?;
@@ -136,9 +149,15 @@ where
         match app.handle_key(key)? {
             KeyOutcome::Continue => {}
             KeyOutcome::Cancel => return Ok(PickerOutcome::Cancelled),
-            KeyOutcome::Confirm(pending) => match items.get(pending.index) {
-                Some(item) => match fetch_with_terminal(&mut terminal, &mut is_locked, || {
-                    fetch(item, pending.action)
+            KeyOutcome::Confirm(pending) => {
+                let vault = &vaults[app.active];
+                let Some(item) = app.items().get(pending.index).cloned() else {
+                    app.set_error(TuiError::SelectedItemMissing.to_string());
+                    continue;
+                };
+
+                match with_unlocked_terminal(&mut terminal, vault, || {
+                    fetch(vault, &item, pending.action)
                 })? {
                     Ok(value) => {
                         return Ok(PickerOutcome::Selected {
@@ -146,10 +165,21 @@ where
                             action: pending.action,
                         });
                     }
-                    Err(error) => app.set_status(error.to_string()),
-                },
-                None => app.set_status(TuiError::SelectedItemMissing.to_string()),
-            },
+                    Err(error) => app.set_error(error.to_string()),
+                }
+            }
+            KeyOutcome::SwitchProfile(delta) => {
+                let next = (app.active as isize + delta).rem_euclid(vaults.len() as isize) as usize;
+                if app.is_loaded(next) {
+                    app.activate(next)?;
+                } else {
+                    load_profile(&mut terminal, &mut app, vaults, next, sync)?;
+                }
+            }
+            KeyOutcome::Reload => {
+                let active = app.active;
+                load_profile(&mut terminal, &mut app, vaults, active, true)?;
+            }
         }
     }
 }
@@ -293,17 +323,45 @@ impl TerminalGuard {
     }
 }
 
-fn fetch_with_terminal<T>(
+/// Loads `vaults[index]` and makes it active. Failures are shown in the status line and leave the
+/// current profile active; returns whether loading succeeded.
+fn load_profile(
     terminal: &mut TerminalGuard,
-    is_locked: &mut impl FnMut() -> bool,
-    fetch: impl FnOnce() -> T,
+    app: &mut PickerApp,
+    vaults: &[Rbw],
+    index: usize,
+    sync: bool,
+) -> Result<bool> {
+    let vault = &vaults[index];
+    app.set_status(format!("Loading profile {}...", vault.profile_name()));
+    terminal.draw(|frame| app.draw(frame))?;
+
+    match with_unlocked_terminal(terminal, vault, || vault.load(sync))? {
+        Ok(items) => {
+            app.store(index, items);
+            app.activate(index)?;
+            Ok(true)
+        }
+        Err(error) => {
+            app.set_error(error.to_string());
+            Ok(false)
+        }
+    }
+}
+
+/// Runs `op` against `vault`, handing the terminal back first if the vault is locked, since rbw
+/// then prompts through pinentry.
+fn with_unlocked_terminal<T>(
+    terminal: &mut TerminalGuard,
+    vault: &Rbw,
+    op: impl FnOnce() -> T,
 ) -> Result<T> {
-    if !is_locked() {
-        return Ok(fetch());
+    if vault.is_unlocked() {
+        return Ok(op());
     }
 
     terminal.suspend()?;
-    let value = fetch();
+    let value = op();
     terminal.resume()?;
     Ok(value)
 }
@@ -438,8 +496,10 @@ impl SearchInput {
     }
 }
 
-struct PickerApp<'a> {
-    items: &'a [VaultItem],
+struct PickerApp {
+    profile_names: Vec<String>,
+    loaded: Vec<Option<Vec<VaultItem>>>,
+    active: usize,
     input: SearchInput,
     fixed_action: Option<CopyField>,
     verb: ActionVerb,
@@ -448,29 +508,29 @@ struct PickerApp<'a> {
     selected: usize,
     list_state: ListState,
     status: String,
+    status_is_error: bool,
     search_area: Option<Rect>,
 }
 
-impl<'a> PickerApp<'a> {
-    fn new(items: &'a [VaultItem], fzf: FzfFilter, config: PickerConfig) -> Result<Self> {
-        let input = SearchInput::new(config.initial_query);
-        let filtered = fzf.filter(items, input.text().trim())?;
-        let status = config
-            .initial_status
-            .unwrap_or_else(|| default_status(&filtered, input.text().trim()));
+impl PickerApp {
+    fn new(profile_names: Vec<String>, fzf: FzfFilter, config: PickerConfig) -> Self {
+        let loaded = profile_names.iter().map(|_| None).collect();
 
-        Ok(Self {
-            items,
-            input,
+        Self {
+            profile_names,
+            loaded,
+            active: 0,
+            input: SearchInput::new(config.initial_query),
             fixed_action: config.fixed_action,
             verb: config.verb,
             fzf,
-            filtered,
+            filtered: Vec::new(),
             selected: 0,
             list_state: ListState::default(),
-            status,
+            status: String::new(),
+            status_is_error: false,
             search_area: None,
-        })
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<KeyOutcome> {
@@ -479,7 +539,18 @@ impl<'a> PickerApp<'a> {
         }
 
         match key.code {
-            KeyCode::Esc => return Ok(KeyOutcome::Cancel),
+            KeyCode::Esc => {
+                if !self.input.clear() {
+                    return Ok(KeyOutcome::Cancel);
+                }
+                self.refresh()?;
+            }
+            KeyCode::Tab if self.profile_names.len() > 1 => {
+                return Ok(KeyOutcome::SwitchProfile(1));
+            }
+            KeyCode::BackTab if self.profile_names.len() > 1 => {
+                return Ok(KeyOutcome::SwitchProfile(-1));
+            }
             KeyCode::Up => self.move_selection(-1),
             KeyCode::Down => self.move_selection(1),
             KeyCode::PageUp => self.move_selection(-10),
@@ -491,7 +562,13 @@ impl<'a> PickerApp<'a> {
             KeyCode::Left => self.input.move_left(),
             KeyCode::Right => self.input.move_right(),
             KeyCode::Enter => {
-                return Ok(self.confirm(self.fixed_action.unwrap_or(CopyField::Password)));
+                let action = default_action(self.current_item(), self.fixed_action);
+                return Ok(self.confirm(action));
+            }
+            KeyCode::Backspace if key.modifiers.contains(KeyModifiers::ALT) => {
+                if self.input.delete_word_before() {
+                    self.refresh()?;
+                }
             }
             KeyCode::Backspace => {
                 if self.input.delete_before() {
@@ -530,12 +607,7 @@ impl<'a> PickerApp<'a> {
                 self.input.move_end();
                 return Ok(KeyOutcome::Continue);
             }
-            KeyCode::Char('w') => {
-                if self.input.delete_word_before() {
-                    self.refresh()?;
-                }
-                return Ok(KeyOutcome::Continue);
-            }
+            KeyCode::Char('r') => return Ok(KeyOutcome::Reload),
             KeyCode::Char('k') => {
                 if self.input.kill_to_end() {
                     self.refresh()?;
@@ -581,9 +653,28 @@ impl<'a> PickerApp<'a> {
         self.selected = next as usize;
     }
 
+    fn items(&self) -> &[VaultItem] {
+        self.loaded[self.active].as_deref().unwrap_or_default()
+    }
+
+    fn is_loaded(&self, profile: usize) -> bool {
+        self.loaded[profile].is_some()
+    }
+
+    fn store(&mut self, profile: usize, items: Vec<VaultItem>) {
+        self.loaded[profile] = Some(items);
+    }
+
+    fn activate(&mut self, profile: usize) -> Result<()> {
+        self.active = profile;
+        self.selected = 0;
+        self.refresh()
+    }
+
     fn refresh(&mut self) -> Result<()> {
         let query = self.input.text().trim();
-        self.filtered = self.fzf.filter(self.items, query)?;
+        let filtered = self.fzf.filter(self.items(), query)?;
+        self.filtered = filtered;
 
         if self.filtered.is_empty() {
             self.selected = 0;
@@ -591,19 +682,26 @@ impl<'a> PickerApp<'a> {
             self.selected = self.selected.min(self.filtered.len() - 1);
         }
         *self.list_state.offset_mut() = 0;
-        self.status = default_status(&self.filtered, query);
+        let status = default_status(&self.filtered, query);
+        self.set_status(status);
 
         Ok(())
     }
 
     fn set_status(&mut self, message: String) {
         self.status = message;
+        self.status_is_error = false;
     }
 
-    fn current_item(&self) -> Option<&'a VaultItem> {
+    fn set_error(&mut self, message: String) {
+        self.status = message;
+        self.status_is_error = true;
+    }
+
+    fn current_item(&self) -> Option<&VaultItem> {
         self.filtered
             .get(self.selected)
-            .and_then(|index| self.items.get(*index))
+            .and_then(|index| self.items().get(*index))
     }
 
     fn draw(&mut self, frame: &mut ratatui::Frame<'_>) {
@@ -617,7 +715,7 @@ impl<'a> PickerApp<'a> {
             ])
             .split(frame.area());
 
-        let action_label = self.fixed_action.map(|f| f.label()).unwrap_or("password");
+        let action_label = default_action(self.current_item(), self.fixed_action).label();
 
         let header = Paragraph::new(vec![
             Line::from(vec![
@@ -629,7 +727,25 @@ impl<'a> PickerApp<'a> {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
-                Span::styled("fast vault access", Style::default().fg(Color::Gray)),
+                Span::styled("profile ", Style::default().fg(Color::Gray)),
+                Span::styled(
+                    self.profile_names[self.active].clone(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    if self.profile_names.len() > 1 {
+                        format!(
+                            "  ({}/{}, Tab to switch)",
+                            self.active + 1,
+                            self.profile_names.len()
+                        )
+                    } else {
+                        String::new()
+                    },
+                    Style::default().fg(Color::Gray),
+                ),
             ]),
             Line::from(vec![
                 shortcut_chip("Enter", action_label),
@@ -665,8 +781,8 @@ impl<'a> PickerApp<'a> {
                 .borders(Borders::ALL)
                 .border_set(border::ROUNDED)
                 .border_style(Style::default().fg(Color::Magenta))
-                .title(" Search with fzf --filter ")
-                .title_bottom(Line::from("Ctrl-L clear • Ctrl-W delete word • Esc quit")),
+                .title(" Search ")
+                .title_bottom(Line::from("Esc clears, then quits")),
         );
         frame.render_widget(search, search_area);
 
@@ -684,7 +800,7 @@ impl<'a> PickerApp<'a> {
         } else {
             self.filtered
                 .iter()
-                .map(|index| render_list_item(&self.items[*index]))
+                .map(|index| render_list_item(&self.items()[*index]))
                 .collect::<Vec<_>>()
         };
 
@@ -714,7 +830,7 @@ impl<'a> PickerApp<'a> {
             .highlight_symbol("❯ ");
         frame.render_stateful_widget(list, middle[0], &mut self.list_state);
 
-        let help_lines = render_help(action_label, self.verb);
+        let help_lines = render_help(action_label, self.verb, self.profile_names.len() > 1);
         let right = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -750,18 +866,16 @@ impl<'a> PickerApp<'a> {
         frame.render_widget(help, right[1]);
 
         let footer = Paragraph::new(Line::from(vec![
-            Span::styled("Status ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("• "),
-            Span::styled(self.status.as_str(), Style::default().fg(Color::Cyan)),
-            Span::raw("   "),
+            Span::raw(" "),
             Span::styled(
-                "Search backend ",
-                Style::default().add_modifier(Modifier::BOLD),
+                self.status.as_str(),
+                Style::default().fg(if self.status_is_error {
+                    Color::Red
+                } else {
+                    Color::Cyan
+                }),
             ),
-            Span::raw("• "),
-            Span::styled("fzf --filter", Style::default().fg(Color::Magenta)),
-        ]))
-        .style(Style::default().fg(Color::Gray));
+        ]));
         frame.render_widget(footer, outer[3]);
     }
 }
@@ -786,11 +900,24 @@ fn searchable_text(item: &VaultItem) -> String {
     )
 }
 
+/// What Enter copies: `--field` if given, otherwise the password, or the text of a secure note.
+fn default_action(item: Option<&VaultItem>, fixed_action: Option<CopyField>) -> CopyField {
+    match (fixed_action, item.map(|item| item.kind)) {
+        (Some(action), _) => action,
+        (None, Some(ItemKind::Note)) => CopyField::Notes,
+        (None, _) => CopyField::Password,
+    }
+}
+
 fn render_list_item(item: &VaultItem) -> ListItem<'static> {
     let mut top = vec![Span::styled(
         item.name.clone(),
         Style::default().add_modifier(Modifier::BOLD),
     )];
+    if item.kind == ItemKind::Note {
+        top.push(Span::raw("  "));
+        top.push(Span::styled("[note]", Style::default().fg(Color::Yellow)));
+    }
     if let Some(folder) = item.folder() {
         top.push(Span::raw("  "));
         top.push(Span::styled(
@@ -825,7 +952,7 @@ fn render_details(
         return vec![Line::from("No item selected")];
     };
 
-    let default_action = fixed_action.unwrap_or(CopyField::Password);
+    let default_action = default_action(Some(item), fixed_action);
 
     vec![
         Line::from(vec![
@@ -878,17 +1005,28 @@ fn render_details(
 }
 
 // Lines stay within 33 columns so the pane does not wrap on an 80-column terminal.
-fn render_help(action_label: &str, verb: ActionVerb) -> Vec<Line<'static>> {
-    vec![
+fn render_help(
+    action_label: &str,
+    verb: ActionVerb,
+    multiple_profiles: bool,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![
         Line::from("↑/↓ PgUp/PgDn Home/End move"),
         Line::from("Ctrl-A/E start/end of query"),
-        Line::from("Ctrl-W/K delete word/to end"),
-        Line::from("Ctrl-L clear • Esc quit"),
+        Line::from("Alt-Backspace delete word"),
+        Line::from("Ctrl-K kill to end • Ctrl-L clear"),
+        Line::from("Ctrl-R sync and reload"),
+        Line::from("Esc clear query, then quit"),
         Line::from(format!("Enter {} {action_label}", verb.descriptive())),
         Line::from("Ctrl-P password • Ctrl-U user"),
         Line::from("Ctrl-T TOTP • Ctrl-O URI"),
         Line::from("Ctrl-N notes"),
-    ]
+    ];
+    if multiple_profiles {
+        lines.push(Line::from("Tab/Shift-Tab switch profile"));
+    }
+
+    lines
 }
 
 fn shortcut_chip<'a>(key: &'a str, description: &'a str) -> Span<'a> {
@@ -914,11 +1052,12 @@ fn sanitize_inline(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{FzfFilter, SearchInput, searchable_text};
-    use crate::rbw::VaultItem;
+    use crate::rbw::{ItemKind, VaultItem};
 
     fn item(id: &str, name: &str, username: &str, uri: &str, folder: Option<&str>) -> VaultItem {
         VaultItem {
             id: id.to_owned(),
+            kind: ItemKind::Login,
             name: name.to_owned(),
             username: Some(username.to_owned()),
             folder: folder.map(ToOwned::to_owned),

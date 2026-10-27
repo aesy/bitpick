@@ -11,7 +11,7 @@ Fast terminal picker for Bitwarden credentials using `rbw` and `fzf`.
 
 ## What it does
 
-- Loads login items from your Bitwarden vault
+- Loads logins and secure notes from your Bitwarden vault (Enter copies a note's text)
 - Filters them in a full-screen TUI
 - Copies the selected field to the clipboard (or prints it with `--print`)
 - Supports passwords, usernames, TOTP codes, URIs, and notes
@@ -45,7 +45,18 @@ rbw login
 bitwarden-tui
 ```
 
-If the vault is locked at startup, `rbw unlock` runs first and asks for the master password through the configured `pinentry` (`rbw config set pinentry pinentry-gnome3`, `pinentry-curses`, ...). How long the vault stays unlocked is set with `rbw config set lock_timeout <SECS>`. If it locks while the picker is open, the picker steps aside for the prompt and comes back afterwards.
+If the vault is locked, `rbw unlock` asks for the master password through the configured `pinentry` (`rbw config set pinentry pinentry-gnome3`, `pinentry-curses`, ...). How long the vault stays unlocked is set with `rbw config set lock_timeout <SECS>`. If it locks while the picker is open, the picker steps aside for the prompt and comes back afterwards.
+
+### Profiles
+
+`rbw` keeps separate vaults per profile (`RBW_PROFILE`). Pass `--profile` once to pick one, or several times to switch between them with `Tab` / `Shift-Tab` inside the picker. An empty name is rbw's default profile:
+
+```bash
+bitwarden-tui --profile work
+bitwarden-tui --profile '' --profile work --profile family
+```
+
+The first profile is loaded at startup; the others are unlocked and loaded the first time you switch to them. Without `--profile`, `RBW_PROFILE` from the environment (or the default profile) is used.
 
 ### Keybindings in the picker
 
@@ -64,9 +75,13 @@ If the vault is locked at startup, `rbw unlock` runs first and asks for the mast
 - `Ctrl-A` / `Ctrl-E`: cursor to start / end of the query
 - `Backspace`: delete the character before the cursor
 - `Delete`: delete the character at the cursor
-- `Ctrl-W`: delete the word before the cursor
+- `Alt-Backspace`: delete the word before the cursor
 - `Ctrl-K`: delete from cursor to end of the query
 - `Ctrl-L`: clear the whole query
+
+**Vault**
+
+- `Ctrl-R`: sync and reload the current profile (also retries after a failed unlock)
 
 **Result navigation**
 
@@ -76,7 +91,12 @@ If the vault is locked at startup, `rbw unlock` runs first and asks for the mast
 
 **Exit**
 
-- `Esc` / `Ctrl-C`: quit
+- `Esc`: clear the query, or quit when it is already empty
+- `Ctrl-C`: quit
+
+**Profiles** (with more than one `--profile`)
+
+- `Tab` / `Shift-Tab`: next / previous profile
 
 The picker draws on the terminal (`/dev/tty`), so `--print` output can be piped or captured, e.g. `pass=$(bitwarden-tui --print)`.
 
