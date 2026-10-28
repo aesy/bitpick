@@ -1,11 +1,11 @@
 [package]
-name = "bitwarden-tui"
+name = "bitpick"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Fast terminal picker for Bitwarden credentials using rbw and fzf"
 license = "MIT"
-repository = "https://github.com/aesy/bitwarden-tui"
+repository = "https://github.com/aesy/bitpick"
 keywords = ["bitwarden", "rbw", "tui", "password-manager", "fzf"]
 categories = ["command-line-utilities"]
 

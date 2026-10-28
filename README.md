@@ -1,4 +1,4 @@
-# bitwarden-tui
+# bitpick
 
 Fast terminal picker for Bitwarden credentials using `rbw` and `fzf`.
 
@@ -42,7 +42,7 @@ Set up `rbw` once, then run:
 ```bash
 rbw config set email you@example.com
 rbw login
-bitwarden-tui
+bitpick
 ```
 
 If the vault is locked, the picker steps aside and `rbw unlock` asks for the master password in the terminal (rbw's configured `pinentry`, in its curses mode), naming the profile being unlocked. How long the vault stays unlocked is set with `rbw config set lock_timeout <SECS>`. This also happens when the vault locks while the picker is open; failures show in the status line.
@@ -52,8 +52,8 @@ If the vault is locked, the picker steps aside and `rbw unlock` asks for the mas
 `rbw` keeps separate vaults per profile (`RBW_PROFILE`). Pass `--profile` once to pick one, or several times to switch between them with `Tab` / `Shift-Tab` inside the picker. An empty name is rbw's default profile:
 
 ```bash
-bitwarden-tui --profile work
-bitwarden-tui --profile '' --profile work --profile family
+bitpick --profile work
+bitpick --profile '' --profile work --profile family
 ```
 
 The first profile is loaded at startup; the others are unlocked and loaded the first time you switch to them. Without `--profile`, `RBW_PROFILE` from the environment (or the default profile) is used.
@@ -102,17 +102,17 @@ In the form: `Tab` / `Shift-Tab` move between fields, `Enter` adds a line in the
 
 - `Tab` / `Shift-Tab`: next / previous profile
 
-The picker draws on the terminal (`/dev/tty`), so `--print` output can be piped or captured, e.g. `pass=$(bitwarden-tui --print)`.
+The picker draws on the terminal (`/dev/tty`), so `--print` output can be piped or captured, e.g. `pass=$(bitpick --print)`.
 
 ### Helpful flags
 
 ```bash
-bitwarden-tui --query github
-bitwarden-tui --field username
-bitwarden-tui --field totp --print
-bitwarden-tui --sync --print
-bitwarden-tui --clipboard-clear 30
-bitwarden-tui --clipboard-clear 0   # disable auto-clear
+bitpick --query github
+bitpick --field username
+bitpick --field totp --print
+bitpick --sync --print
+bitpick --clipboard-clear 30
+bitpick --clipboard-clear 0   # disable auto-clear
 ```
 
 ## Security

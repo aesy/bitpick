@@ -697,7 +697,7 @@ impl PickerApp {
             Line::from(vec![
                 Span::raw(" "),
                 Span::styled(
-                    "Bitwarden TUI",
+                    "bitpick",
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
