@@ -656,12 +656,7 @@ impl PickerApp {
         let query = self.input.text().trim();
         let filtered = self.fzf.filter(self.items(), query)?;
         self.filtered = filtered;
-
-        if self.filtered.is_empty() {
-            self.selected = 0;
-        } else {
-            self.selected = self.selected.min(self.filtered.len() - 1);
-        }
+        self.selected = 0;
         *self.list_state.offset_mut() = 0;
         let status = default_status(&self.filtered, query);
         self.set_status(status);
