@@ -1,0 +1,43 @@
+# Maintainer: Isak Wertwein <isak.wertwein@gmail.com>
+
+pkgname=bitpick
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Fast terminal picker for Bitwarden credentials using rbw and fzf'
+arch=('x86_64' 'aarch64')
+url='https://github.com/aesy/bitpick'
+license=('MIT')
+depends=('fzf' 'gcc-libs' 'glibc' 'rbw')
+optdepends=('wl-clipboard: Wayland clipboard'
+            'xclip: X11 clipboard'
+            'xsel: X11 clipboard')
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+# Run updpkgsums once the tag exists
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm0755 target/release/bitpick "$pkgdir/usr/bin/bitpick"
+  install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
