@@ -88,7 +88,7 @@ curl -L https://github.com/aesy/bitpick/releases/latest/download/bitpick-windows
 
 ### Arch Linux
 
-Build [`app/pkg/arch/PKGBUILD`](/app/pkg/arch/PKGBUILD) with `makepkg -si`.
+Build [`pkg/arch/PKGBUILD`](/pkg/arch/PKGBUILD) with `makepkg -si`.
 
 ### Cargo
 
