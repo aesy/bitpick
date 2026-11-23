@@ -139,8 +139,7 @@ impl Form {
             self.fields
                 .iter()
                 .find(|field| field.label == label)
-                .map(|field| field.input.text().to_owned())
-                .unwrap_or_default()
+                .map_or_default(|field| field.input.text().to_owned())
         };
 
         match &self.target {

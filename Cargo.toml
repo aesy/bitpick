@@ -5,7 +5,7 @@ members = ["app"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.100.0"
 authors = ["Isak Wertwein <isak.wertwein@gmail.com>"]
 license = "MIT"
 homepage = "https://aesy.github.io/bitpick/"
