@@ -1,0 +1,35 @@
+export const colors = {
+  page: '#0d1014',
+  band: '#10141a',
+  surface: '#11161c',
+  surfaceRaised: '#151b22',
+  keycap: '#1a2029',
+  line: '#222934',
+  lineSoft: '#1b212a',
+  lineStrong: '#2f3846',
+  keyBorder: '#39424f',
+  text: '#e6e9ee',
+  label: '#c4cbd5',
+  nav: '#b4bcc8',
+  soft: '#a9b2bf',
+  muted: '#8f99a8',
+  primary: '#175ddc',
+  onPrimary: '#ffffff',
+  accent: '#6ea4ff',
+  accentHover: '#9cc2ff',
+};
+
+// The terminal palette the TUI draws with, not the page's.
+export const terminal = {
+  frame: '#2a323e',
+  dot: '#3a4350',
+  blue: '#5c9cf5',
+  magenta: '#c678dd',
+  green: '#98c379',
+  yellow: '#e5c07b',
+  cyan: '#56b6c2',
+  gray: '#9aa4b2',
+  chip: '#4b5263',
+  highlight: '#8ab4f8',
+  onHighlight: '#0b0e12',
+};

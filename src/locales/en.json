@@ -1,0 +1,108 @@
+{
+  "nav": {
+    "label": "Main",
+    "features": "Features",
+    "keybindings": "Shortcuts",
+    "install": "Install",
+    "github": "GitHub"
+  },
+  "hero": {
+    "title": "A terminal picker for Bitwarden credentials",
+    "lede": "bitpick lists the logins and secure notes in your vault, filters them as you type, and copies the field you pick to the clipboard. Vault access goes through rbw and matching through fzf.",
+    "install": "Install",
+    "source": "Source on GitHub",
+    "note": "Linux, macOS and Windows. MIT license.",
+    "screen": "The bitpick picker filtering a vault for git"
+  },
+  "features": {
+    "title": "Features",
+    "lede": "The picker is a full-screen TUI built with ratatui. It reads the vault through rbw and hands matching to fzf --filter.",
+    "items": {
+      "fast": {
+        "title": "Fast startup",
+        "body": "rbw's background agent keeps the vault unlocked, so loading takes milliseconds instead of the seconds the official bw CLI needs."
+      },
+      "fzf": {
+        "title": "fzf matching",
+        "body": "Searching is delegated to fzf, so matching works the same as it does elsewhere in your shell."
+      },
+      "fields": {
+        "title": "All fields",
+        "body": "Copies a login's password, username, TOTP code, URI or notes, or a secure note's text. Enter copies the password, or the field set with --field."
+      },
+      "clipboard": {
+        "title": "Clipboard clearing",
+        "body": "The clipboard is cleared 45 seconds after a copy, unless another program has changed it. Set the delay with --clipboard-clear, or 0 to turn it off."
+      },
+      "profiles": {
+        "title": "Profiles",
+        "body": "Pass --profile more than once to switch between rbw profiles with Tab. Each one is unlocked and loaded the first time you switch to it."
+      },
+      "edit": {
+        "title": "Adding and editing",
+        "body": "Alt-N adds a login and Alt-E edits the selected entry. rbw can only change a login's password and notes, or a secure note's text."
+      }
+    }
+  },
+  "keybindings": {
+    "title": "Keybindings",
+    "lede": "The query line also takes Ctrl-A, Ctrl-E, Ctrl-K and Alt-Backspace. The <link>README</link> has the full list.",
+    "scripting": "Scripting",
+    "scriptingBody": "The picker draws on the terminal, so with --print the value goes to stdout and can be captured or piped.",
+    "bindings": {
+      "password": "Copy password",
+      "username": "Copy username",
+      "totp": "Copy TOTP code",
+      "uri": "Copy URI",
+      "notes": "Copy notes",
+      "sync": "Sync and reload",
+      "add": "New login",
+      "edit": "Edit selected",
+      "profile": "Next profile",
+      "quit": "Clear query, then quit"
+    }
+  },
+  "security": {
+    "title": "Security",
+    "lede": "bitpick keeps no copy of the vault. It asks rbw for the field you picked.",
+    "items": {
+      "disk": {
+        "title": "Nothing on disk",
+        "body": "No session token or vault data is written by bitpick. Keys stay inside the rbw agent."
+      },
+      "demand": {
+        "title": "Fetched on demand",
+        "body": "The list only holds names and usernames. Passwords, notes and TOTP secrets load for the item you pick."
+      },
+      "unlock": {
+        "title": "Unlocking",
+        "body": "When the vault is locked, rbw unlock asks for the master password in the terminal, naming the profile."
+      }
+    }
+  },
+  "install": {
+    "title": "Install",
+    "lede": "You need <rbw>rbw</rbw>, set up and logged in, and <fzf>fzf</fzf> on your PATH. Clipboard support is built in; use --print where there is none.",
+    "releases": {
+      "title": "Release binaries",
+      "body": "Linux (x86_64 and ARM64, statically linked), macOS (Apple silicon) and Windows (x86_64).",
+      "link": "Releases"
+    },
+    "arch": {
+      "title": "Arch Linux",
+      "body": "Build the PKGBUILD from a checkout."
+    },
+    "cargo": {
+      "title": "Cargo",
+      "body": "Published on crates.io as bitpick-cli, which installs the bitpick binary."
+    },
+    "firstRun": "First run"
+  },
+  "footer": {
+    "label": "Footer",
+    "license": "MIT licensed. Not affiliated with Bitwarden, Inc.",
+    "source": "Source",
+    "releases": "Releases",
+    "issues": "Report a problem"
+  }
+}
