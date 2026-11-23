@@ -28,7 +28,7 @@ Fast terminal picker for Bitwarden credentials using `rbw` and `fzf`.
 Release binaries for Linux (x86_64), macOS (Apple silicon) and Windows (x86_64) are on the
 [releases page](https://github.com/aesy/bitpick/releases).
 
-On Arch Linux, build `pkg/arch/PKGBUILD` with `makepkg -si`.
+On Arch Linux, build `app/pkg/arch/PKGBUILD` with `makepkg -si`.
 
 Anywhere else, with the latest stable Rust:
 
