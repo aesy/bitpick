@@ -1,6 +1,31 @@
-# bitpick
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./img/logo-dark.svg">
+  <img height="70" alt="bitpick" src="./img/logo-light.svg">
+</picture>
 
-Fast terminal picker for Bitwarden credentials using `rbw` and `fzf`.
+[![Crate][crate-image]][crate-url]
+[![Build Status][github-actions-image]][github-actions-url]
+[![Test coverage][codecov-image]][codecov-url]
+[![MIT license][license-image]][license-url]
+
+[crate-image]: https://img.shields.io/crates/v/bitpick-cli?style=flat-square
+[crate-url]: https://crates.io/crates/bitpick-cli
+
+[github-actions-image]: https://img.shields.io/github/actions/workflow/status/aesy/bitpick/ci.yml?branch=main&style=flat-square
+[github-actions-url]: https://github.com/aesy/bitpick/actions
+
+[codecov-image]: https://img.shields.io/codecov/c/github/aesy/bitpick?style=flat-square
+[codecov-url]: https://codecov.io/github/aesy/bitpick
+
+[license-image]: https://img.shields.io/github/license/aesy/bitpick?style=flat-square
+[license-url]: https://github.com/aesy/bitpick/blob/main/LICENSE
+
+Fast terminal picker for Bitwarden credentials using `rbw` and `fzf`. `bitpick` is available as a native single-binary
+Linux/macOS/Windows CLI tool.
+
+[Visit the website](https://aesy.github.io/bitpick/) to see what it can do.
+
+<img src="./img/screenshot.png" alt="The bitpick picker filtering a vault for git, with the GitHub login selected">
 
 ## Implementation notes
 
@@ -23,22 +48,73 @@ Fast terminal picker for Bitwarden credentials using `rbw` and `fzf`.
 - `fzf` in your `PATH`
 - A clipboard backend (any of: `arboard` builds in support for X11/Wayland/macOS/Windows; alternatively one of `wl-copy`, `xclip`, `xsel`, `pbcopy`, `clip.exe` on `PATH`). Not needed if you only use `--print`.
 
-## Install
+## Installation
 
-Release binaries for Linux (x86_64), macOS (Apple silicon) and Windows (x86_64) are on the
-[releases page](https://github.com/aesy/bitpick/releases).
+### Binaries
 
-On Arch Linux, build `app/pkg/arch/PKGBUILD` with `makepkg -si`.
+The latest stable `bitpick` releases are available as [prebuilt binaries under GitHub
+releases](https://github.com/aesy/bitpick/releases) for Linux (x86_64 and ARM64, statically linked), macOS (Apple Silicon)
+and Windows (x86_64). Binaries for other platforms have to be built from source.
 
-Anywhere else, with the latest stable Rust:
+#### Linux
 
-```bash
-cargo install --locked --git https://github.com/aesy/bitpick
+Example on how to download and install a `bitpick` binary using [curl](https://curl.se/):
+
+```shell
+curl -L https://github.com/aesy/bitpick/releases/latest/download/bitpick-linux-amd64 -o bitpick
+chmod +x bitpick
+sudo mv bitpick /usr/local/bin
 ```
+
+On ARM64, download `bitpick-linux-arm64` instead.
+
+#### macOS
+
+Example on how to download and install a `bitpick` binary using [curl](https://curl.se/):
+
+```shell
+curl -L https://github.com/aesy/bitpick/releases/latest/download/bitpick-macos-arm64 -o bitpick
+chmod +x bitpick
+sudo mv bitpick /usr/local/bin
+```
+
+#### Windows
+
+Example on how to download a `bitpick` binary using [curl](https://curl.se/):
+
+```shell
+curl -L https://github.com/aesy/bitpick/releases/latest/download/bitpick-windows-amd64.exe -o bitpick.exe
+```
+
+### Arch Linux
+
+Build [`app/pkg/arch/PKGBUILD`](/app/pkg/arch/PKGBUILD) with `makepkg -si`.
+
+### Cargo
+
+`bitpick` is published on [crates.io](https://crates.io/crates/bitpick-cli) as `bitpick-cli` and installs the `bitpick`
+binary:
+
+```shell
+cargo install bitpick-cli
+```
+
+### Build from source
+
+To build the CLI, run the following command:
+
+```shell
+cargo build --target <target> --release
+```
+
+The resulting binary can be found in the repositories root directory under `target/<target>/release/` called `bitpick`.
+
+The `<target>` options can be found
+at [Rust's platform support page](https://doc.rust-lang.org/nightly/rustc/platform-support.html).
 
 Or from a checkout, run without installing:
 
-```bash
+```shell
 cargo run --release -- --sync
 ```
 
@@ -132,3 +208,50 @@ bitpick --clipboard-clear 0   # disable auto-clear
 
 - Use `--print` when clipboard access is unavailable.
 - If a field such as notes or TOTP is missing, the TUI shows a status message instead of exiting.
+
+## Development
+
+#### Prerequisites
+
+* [Rust Stable 1.88.0+](https://www.rust-lang.org/tools/install)
+* [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+* [Rust Nightly](https://rust-lang.github.io/rustup/concepts/channels.html) - only for formatting, see [Linting](#linting)
+* [fzf](https://github.com/junegunn/fzf) - the fzf test is skipped without it
+
+#### Build
+
+To compile the project, simply issue the following command:
+
+```shell
+$ cargo build
+```
+
+#### Test
+
+##### Linting
+
+This project uses [rustfmt](https://github.com/rust-lang/rustfmt) for formatting and
+[clippy](https://github.com/rust-lang/rust-clippy) for linting. The formatting config uses unstable options, so
+rustfmt has to run on the nightly channel:
+
+```shell
+$ cargo +nightly fmt
+$ cargo clippy --all-targets
+```
+
+##### Unit/Integration/Doc Testing
+
+All code that goes into main must pass all tests. To run all tests, use:
+
+```shell
+$ cargo test
+```
+
+## Contribute
+
+Use the [issue tracker](https://github.com/aesy/bitpick/issues) to report bugs or make feature requests. Pull requests are
+welcome, but it may be a good idea to create an issue to discuss any changes beforehand.
+
+## License
+
+MIT, see [LICENSE](/LICENSE) file.
