@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./img/logo-dark.svg">
-  <img height="70" alt="bitpick" src="./img/logo-light.svg">
+  <img height="42" alt="bitpick" src="./img/logo-light.svg">
 </picture>
 
 [![Crate][crate-image]][crate-url]
