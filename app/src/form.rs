@@ -12,13 +12,13 @@ use crate::text_input::TextInput;
 const LABEL_WIDTH: u16 = 10;
 const NOTES_HEIGHT: u16 = 6;
 
-pub(crate) enum FormOutcome {
+pub enum FormOutcome {
     Continue,
     Cancel,
     Submit,
 }
 
-pub(crate) enum FormRequest {
+pub enum FormRequest {
     Add(NewLogin),
     EditLogin {
         id: String,
@@ -60,7 +60,7 @@ impl Field {
     }
 }
 
-pub(crate) struct Form {
+pub struct Form {
     title: String,
     target: Target,
     fields: Vec<Field>,
@@ -70,7 +70,7 @@ pub(crate) struct Form {
 }
 
 impl Form {
-    pub(crate) fn new_login() -> Self {
+    pub fn new_login() -> Self {
         Self::with_fields(
             " New login ".to_owned(),
             Target::New,
@@ -86,7 +86,7 @@ impl Form {
     }
 
     /// rbw can only change the password and notes of an existing entry.
-    pub(crate) fn edit(item: &VaultItem, entry: &Entry) -> Self {
+    pub fn edit(item: &VaultItem, entry: &Entry) -> Self {
         let notes = entry.notes().unwrap_or_default();
         let title = format!(" Edit {} ", item.name);
 
@@ -115,7 +115,7 @@ impl Form {
         }
     }
 
-    fn with_fields(title: String, target: Target, fields: Vec<Field>) -> Self {
+    const fn with_fields(title: String, target: Target, fields: Vec<Field>) -> Self {
         Self {
             title,
             target,
@@ -126,15 +126,15 @@ impl Form {
         }
     }
 
-    pub(crate) fn set_error(&mut self, message: String) {
+    pub fn set_error(&mut self, message: String) {
         self.message = Some((message, true));
     }
 
-    pub(crate) fn set_info(&mut self, message: String) {
+    pub fn set_info(&mut self, message: String) {
         self.message = Some((message, false));
     }
 
-    pub(crate) fn request(&self) -> Option<FormRequest> {
+    pub fn request(&self) -> Option<FormRequest> {
         let value = |label: &str| {
             self.fields
                 .iter()
@@ -158,7 +158,7 @@ impl Form {
                     password: value("Password"),
                     notes: value("Notes"),
                 }))
-            }
+            },
             Target::Login { id } => Some(FormRequest::EditLogin {
                 id: id.clone(),
                 password: value("Password"),
@@ -171,7 +171,7 @@ impl Form {
         }
     }
 
-    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> FormOutcome {
+    pub fn handle_key(&mut self, key: KeyEvent) -> FormOutcome {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let multiline = self.fields[self.focus].style == FieldStyle::Multiline;
@@ -196,13 +196,13 @@ impl Form {
             KeyCode::Enter => input.insert('\n'),
             KeyCode::Backspace if alt => {
                 input.delete_word_before();
-            }
+            },
             KeyCode::Backspace => {
                 input.delete_before();
-            }
+            },
             KeyCode::Delete => {
                 input.delete_at();
-            }
+            },
             KeyCode::Left => input.move_left(),
             KeyCode::Right => input.move_right(),
             KeyCode::Home => input.move_start(),
@@ -211,39 +211,47 @@ impl Form {
             KeyCode::Char('e') if control => input.move_end(),
             KeyCode::Char('k') if control => {
                 input.kill_to_end();
-            }
+            },
             KeyCode::Char(ch) if !control && !alt => input.insert(ch),
-            _ => {}
+            _ => {},
         }
     }
 
     fn move_focus(&mut self, delta: isize) {
-        let last = self.fields.len() as isize - 1;
-        self.focus = (self.focus as isize + delta).clamp(0, last) as usize;
+        let last = self.fields.len().cast_signed() - 1;
+        self.focus = (self.focus.cast_signed() + delta)
+            .clamp(0, last)
+            .cast_unsigned();
     }
 
-    pub(crate) fn draw(&self, frame: &mut Frame<'_>) {
-        let single_rows = self
-            .fields
-            .iter()
-            .filter(|field| field.style != FieldStyle::Multiline)
-            .count() as u16;
+    fn area(&self, screen: Rect) -> Rect {
+        let single_rows = u16::try_from(
+            self.fields
+                .iter()
+                .filter(|field| field.style != FieldStyle::Multiline)
+                .count(),
+        )
+        .unwrap_or(u16::MAX);
         let has_notes = self
             .fields
             .iter()
             .any(|field| field.style == FieldStyle::Multiline);
         let notes_rows = if has_notes { NOTES_HEIGHT + 1 } else { 0 };
-        // Fields, a blank row, the message row and the key hints, plus the border.
+        // Fields, a blank row, the message row and the key hints, plus the
+        // border.
         let height = single_rows + notes_rows + 3 + 2;
-
-        let screen = frame.area();
         let width = screen.width.saturating_sub(4).min(72);
-        let area = Rect {
+
+        Rect {
             x: screen.x + (screen.width.saturating_sub(width)) / 2,
             y: screen.y + (screen.height.saturating_sub(height)) / 2,
             width,
             height: height.min(screen.height),
-        };
+        }
+    }
+
+    pub fn draw(&self, frame: &mut Frame<'_>) {
+        let area = self.area(frame.area());
 
         let block = Block::default()
             .borders(Borders::ALL)

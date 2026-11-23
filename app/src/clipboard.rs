@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use which::which;
 
-// On X11/Wayland the clipboard content is served by the process that set it and vanishes when it
-// exits. Shell tools fork a daemon for that; arboard needs a process of ours to stay alive.
+// On X11/Wayland the clipboard content is served by the process that set it and
+// vanishes when it exits. Shell tools fork a daemon for that; arboard needs a
+// process of ours to stay alive.
 const OWNER_SERVED_CLIPBOARD: bool = cfg!(any(
     target_os = "linux",
     target_os = "freebsd",
@@ -70,8 +71,9 @@ impl Clipboard {
         Ok(Self { inner, external })
     }
 
-    /// Whether a copy must go through [`spawn_worker`] so the content outlives this process.
-    pub fn needs_worker(&self) -> bool {
+    /// Whether a copy must go through [`spawn_worker`] so the content outlives
+    /// this process.
+    pub const fn needs_worker(&self) -> bool {
         OWNER_SERVED_CLIPBOARD && self.external.is_none()
     }
 
@@ -108,15 +110,15 @@ impl Clipboard {
                 Ok(value) => return Ok(value),
                 Err(error) => {
                     first_error.get_or_insert(error);
-                }
+                },
             }
         }
 
         Err(first_error.unwrap_or(ClipboardError::Unavailable))
     }
 
-    /// Sets the clipboard and keeps serving it until `deadline`, or until another program
-    /// replaces it.
+    /// Sets the clipboard and keeps serving it until `deadline`, or until
+    /// another program replaces it.
     #[cfg(any(
         target_os = "linux",
         target_os = "freebsd",
@@ -148,8 +150,9 @@ impl Clipboard {
     }
 }
 
-/// Starts a detached copy of this binary that clears the clipboard after `clear_after` and, when
-/// [`Clipboard::needs_worker`], also sets and serves the clipboard itself.
+/// Starts a detached copy of this binary that clears the clipboard after
+/// `clear_after` and, when [`Clipboard::needs_worker`], also sets and serves
+/// the clipboard itself.
 pub fn spawn_worker(value: &str, clear_after: Option<Duration>) -> Result<()> {
     let program = std::env::current_exe()?;
     let secs = clear_after.map_or(0, |delay| delay.as_secs()).to_string();
@@ -209,7 +212,8 @@ fn detach(command: &mut Command) {
     {
         use std::os::unix::process::CommandExt;
 
-        // Outside the shell's job process groups, so closing the terminal does not SIGHUP it.
+        // Outside the shell's job process groups, so closing the terminal does
+        // not SIGHUP it.
         command.process_group(0);
     }
 
@@ -217,7 +221,8 @@ fn detach(command: &mut Command) {
     {
         use std::os::windows::process::CommandExt;
 
-        // DETACHED_PROCESS: no console of its own, so closing ours does not end it.
+        // DETACHED_PROCESS: no console of its own, so closing ours does not end
+        // it.
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         command.creation_flags(DETACHED_PROCESS);
     }

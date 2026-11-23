@@ -23,8 +23,8 @@ pub struct Cli {
     #[arg(long)]
     pub sync: bool,
 
-    /// rbw profile to use (sets `RBW_PROFILE`). Repeat to switch between profiles with Tab;
-    /// an empty name is rbw's default profile.
+    /// rbw profile to use (sets `RBW_PROFILE`). Repeat to switch between
+    /// profiles with Tab; an empty name is rbw's default profile.
     #[arg(long = "profile", value_name = "NAME")]
     pub profiles: Vec<String>,
 
@@ -54,7 +54,7 @@ pub enum CopyField {
 }
 
 impl CopyField {
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Username => "username",
             Self::Password => "password",
@@ -71,6 +71,12 @@ impl fmt::Display for CopyField {
     }
 }
 
+/// Parses the command line and runs the picker.
+///
+/// # Errors
+///
+/// Returns [`AppError::Cancelled`] when the picker is closed without a
+/// selection, and other variants when rbw, fzf or the clipboard fail.
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -119,7 +125,7 @@ pub fn run() -> Result<()> {
 
     match outcome {
         PickerOutcome::Cancelled => Err(AppError::Cancelled),
-        PickerOutcome::Selected { value, .. } => {
+        PickerOutcome::Selected { value } => {
             if cli.print {
                 println!("{value}");
                 return Ok(());
@@ -143,7 +149,7 @@ pub fn run() -> Result<()> {
             }
 
             Ok(())
-        }
+        },
     }
 }
 
@@ -159,7 +165,7 @@ pub fn selected_value(rbw: &Rbw, item: &VaultItem, field: CopyField) -> Result<S
             } else {
                 None
             }
-        }
+        },
     };
 
     value

@@ -54,8 +54,8 @@ pub type Result<T> = std::result::Result<T, RbwError>;
 
 const PROFILE_ENV: &str = "RBW_PROFILE";
 
-// rbw forwards these to pinentry. Without them pinentry prompts on the terminal (curses) instead
-// of opening a window.
+// rbw forwards these to pinentry. Without them pinentry prompts on the terminal
+// (curses) instead of opening a window.
 const DISPLAY_ENV: [&str; 3] = ["DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE"];
 
 pub struct Rbw {
@@ -65,7 +65,8 @@ pub struct Rbw {
 }
 
 impl Rbw {
-    /// `profile` is passed to rbw as `RBW_PROFILE`; `None` keeps the inherited environment.
+    /// `profile` is passed to rbw as `RBW_PROFILE`; `None` keeps the inherited
+    /// environment.
     pub fn new(profile: Option<String>) -> Result<Self> {
         let program = which("rbw").map_err(|_| RbwError::MissingProgram)?;
         let profile_name = profile
@@ -104,8 +105,8 @@ impl Rbw {
             .is_ok_and(|status| status.success())
     }
 
-    /// Unlocks the agent if needed. Must run while the terminal is free, since pinentry prompts
-    /// on it.
+    /// Unlocks the agent if needed. Must run while the terminal is free, since
+    /// pinentry prompts on it.
     pub fn ensure_unlocked(&self) -> Result<()> {
         if self.is_unlocked() {
             return Ok(());
@@ -168,7 +169,8 @@ impl Rbw {
         self.run_with_input(&args, &login_editor_contents(&login.password, &login.notes))
     }
 
-    /// Replaces the password and notes of a login; rbw cannot change its other fields.
+    /// Replaces the password and notes of a login; rbw cannot change its other
+    /// fields.
     pub fn edit_login(&self, id: &str, password: &str, notes: &str) -> Result<()> {
         self.run_with_input(&["edit", id], &login_editor_contents(password, notes))
     }
@@ -193,8 +195,8 @@ impl Rbw {
         })
     }
 
-    /// Runs an rbw command that would open `$EDITOR`; rbw reads the contents from stdin instead
-    /// when stdin is not a terminal.
+    /// Runs an rbw command that would open `$EDITOR`; rbw reads the contents
+    /// from stdin instead when stdin is not a terminal.
     fn run_with_input(&self, args: &[&str], input: &str) -> Result<()> {
         let rendered = render_command(args);
         let mut child = self
@@ -286,7 +288,8 @@ impl Rbw {
     }
 }
 
-/// rbw's editor format for logins: the password on the first line, the notes after it.
+/// rbw's editor format for logins: the password on the first line, the notes
+/// after it.
 fn login_editor_contents(password: &str, notes: &str) -> String {
     format!("{password}\n{notes}\n")
 }
@@ -336,7 +339,8 @@ pub struct VaultItem {
 }
 
 impl VaultItem {
-    /// `None` for entry types the picker does not offer (cards, identities, SSH keys).
+    /// `None` for entry types the picker does not offer (cards, identities, SSH
+    /// keys).
     fn from_entry(entry: ListEntry) -> Option<Self> {
         let kind = match entry.entry_type.as_deref()? {
             "Login" => ItemKind::Login,
@@ -370,8 +374,8 @@ impl VaultItem {
     }
 }
 
-/// One entry from `rbw get --raw`. Only logins and secure notes are fetched; a note's `data`
-/// is `null`.
+/// One entry from `rbw get --raw`. Only logins and secure notes are fetched; a
+/// note's `data` is `null`.
 #[derive(Deserialize)]
 pub struct Entry {
     #[serde(default)]

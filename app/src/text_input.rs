@@ -1,39 +1,39 @@
 use ratatui::text::Span;
 
 #[derive(Debug, Clone)]
-pub(crate) struct TextInput {
+pub struct TextInput {
     text: String,
     cursor: usize,
 }
 
 impl TextInput {
-    pub(crate) fn new(initial: impl Into<String>) -> Self {
+    pub fn new(initial: impl Into<String>) -> Self {
         let text = initial.into();
         let cursor = text.len();
         Self { text, cursor }
     }
 
-    pub(crate) fn text(&self) -> &str {
+    pub fn text(&self) -> &str {
         &self.text
     }
 
     /// Display column of the cursor within its line.
-    pub(crate) fn cursor_column(&self) -> u16 {
+    pub fn cursor_column(&self) -> u16 {
         let before = &self.text[..self.cursor];
         let line_start = before.rfind('\n').map_or(0, |index| index + 1);
-        Span::raw(&before[line_start..]).width() as u16
+        u16::try_from(Span::raw(&before[line_start..]).width()).unwrap_or(u16::MAX)
     }
 
-    pub(crate) fn cursor_row(&self) -> u16 {
-        self.text[..self.cursor].matches('\n').count() as u16
+    pub fn cursor_row(&self) -> u16 {
+        u16::try_from(self.text[..self.cursor].matches('\n').count()).unwrap_or(u16::MAX)
     }
 
-    pub(crate) fn insert(&mut self, ch: char) {
+    pub fn insert(&mut self, ch: char) {
         self.text.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
     }
 
-    pub(crate) fn delete_before(&mut self) -> bool {
+    pub fn delete_before(&mut self) -> bool {
         if self.cursor == 0 {
             return false;
         }
@@ -43,7 +43,7 @@ impl TextInput {
         true
     }
 
-    pub(crate) fn delete_at(&mut self) -> bool {
+    pub fn delete_at(&mut self) -> bool {
         if self.cursor >= self.text.len() {
             return false;
         }
@@ -52,7 +52,7 @@ impl TextInput {
         true
     }
 
-    pub(crate) fn delete_word_before(&mut self) -> bool {
+    pub fn delete_word_before(&mut self) -> bool {
         if self.cursor == 0 {
             return false;
         }
@@ -75,7 +75,7 @@ impl TextInput {
         true
     }
 
-    pub(crate) fn kill_to_end(&mut self) -> bool {
+    pub fn kill_to_end(&mut self) -> bool {
         if self.cursor >= self.text.len() {
             return false;
         }
@@ -83,27 +83,27 @@ impl TextInput {
         true
     }
 
-    pub(crate) fn move_left(&mut self) {
+    pub fn move_left(&mut self) {
         if self.cursor > 0 {
             self.cursor = self.prev_boundary(self.cursor);
         }
     }
 
-    pub(crate) fn move_right(&mut self) {
+    pub fn move_right(&mut self) {
         if self.cursor < self.text.len() {
             self.cursor = self.next_boundary(self.cursor);
         }
     }
 
-    pub(crate) fn move_start(&mut self) {
+    pub const fn move_start(&mut self) {
         self.cursor = 0;
     }
 
-    pub(crate) fn move_end(&mut self) {
+    pub const fn move_end(&mut self) {
         self.cursor = self.text.len();
     }
 
-    pub(crate) fn clear(&mut self) -> bool {
+    pub fn clear(&mut self) -> bool {
         if self.text.is_empty() && self.cursor == 0 {
             return false;
         }
@@ -112,20 +112,18 @@ impl TextInput {
         true
     }
 
-    pub(crate) fn prev_boundary(&self, idx: usize) -> usize {
+    pub fn prev_boundary(&self, idx: usize) -> usize {
         self.text[..idx]
             .char_indices()
             .next_back()
-            .map(|(i, _)| i)
-            .unwrap_or(0)
+            .map_or(0, |(i, _)| i)
     }
 
-    pub(crate) fn next_boundary(&self, idx: usize) -> usize {
+    pub fn next_boundary(&self, idx: usize) -> usize {
         self.text[idx..]
             .chars()
             .next()
-            .map(|c| idx + c.len_utf8())
-            .unwrap_or_else(|| self.text.len())
+            .map_or_else(|| self.text.len(), |c| idx + c.len_utf8())
     }
 }
 

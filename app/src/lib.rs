@@ -1,9 +1,9 @@
-pub mod app;
-pub mod clipboard;
+mod app;
+mod clipboard;
 pub mod error;
 mod form;
-pub mod rbw;
+mod rbw;
 mod text_input;
-pub mod tui;
+mod tui;
 
 pub use app::run;

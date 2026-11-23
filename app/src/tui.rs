@@ -70,7 +70,7 @@ pub enum ActionVerb {
 }
 
 impl ActionVerb {
-    fn descriptive(self) -> &'static str {
+    const fn descriptive(self) -> &'static str {
         match self {
             Self::Copy => "copies",
             Self::Print => "prints",
@@ -89,7 +89,7 @@ pub struct PickerConfig {
 }
 
 pub enum PickerOutcome {
-    Selected { value: String, action: CopyField },
+    Selected { value: String },
     Cancelled,
 }
 
@@ -151,7 +151,7 @@ where
         }
 
         match app.handle_key(key)? {
-            KeyOutcome::Continue => {}
+            KeyOutcome::Continue => {},
             KeyOutcome::Cancel => return Ok(PickerOutcome::Cancelled),
             KeyOutcome::Confirm(pending) => {
                 let vault = &vaults[app.active];
@@ -164,26 +164,25 @@ where
                     fetch(vault, &item, pending.action)
                 })? {
                     Ok(value) => {
-                        return Ok(PickerOutcome::Selected {
-                            value,
-                            action: pending.action,
-                        });
-                    }
+                        return Ok(PickerOutcome::Selected { value });
+                    },
                     Err(error) => app.set_error(error.to_string()),
                 }
-            }
+            },
             KeyOutcome::SwitchProfile(delta) => {
-                let next = (app.active as isize + delta).rem_euclid(vaults.len() as isize) as usize;
+                let next = (app.active.cast_signed() + delta)
+                    .rem_euclid(vaults.len().cast_signed())
+                    .cast_unsigned();
                 if app.is_loaded(next) {
                     app.activate(next)?;
                 } else {
                     load_profile(&mut terminal, &mut app, vaults, next, sync)?;
                 }
-            }
+            },
             KeyOutcome::Reload => {
                 let active = app.active;
                 load_profile(&mut terminal, &mut app, vaults, active, true)?;
-            }
+            },
             KeyOutcome::Edit(index) => {
                 let vault = &vaults[app.active];
                 let Some(item) = app.items().get(index).cloned() else {
@@ -195,17 +194,17 @@ where
                     Ok(entry) => app.form = Some(Form::edit(&item, &entry)),
                     Err(error) => app.set_error(error.to_string()),
                 }
-            }
+            },
             KeyOutcome::SaveForm => {
                 let vault = &vaults[app.active];
                 save_form(&mut terminal, &mut app, vault)?;
-            }
+            },
         }
     }
 }
 
-/// Saves the open form through rbw and reloads the active profile on success. Failures stay in
-/// the form so nothing typed is lost.
+/// Saves the open form through rbw and reloads the active profile on success.
+/// Failures stay in the form so nothing typed is lost.
 fn save_form(terminal: &mut TerminalGuard, app: &mut PickerApp, vault: &Rbw) -> Result<()> {
     let Some(form) = app.form.as_mut() else {
         return Ok(());
@@ -242,7 +241,7 @@ fn save_form(terminal: &mut TerminalGuard, app: &mut PickerApp, vault: &Rbw) -> 
             app.store(active, items);
             app.activate(active)?;
             app.set_status("Saved".to_owned());
-        }
+        },
         Err(error) => app.set_error(error.to_string()),
     }
 
@@ -332,7 +331,8 @@ impl FzfFilter {
     }
 }
 
-// The UI is drawn on the terminal itself so stdout stays free for `--print` in pipes.
+// The UI is drawn on the terminal itself so stdout stays free for `--print` in
+// pipes.
 #[cfg(unix)]
 type TerminalOutput = std::fs::File;
 #[cfg(not(unix))]
@@ -388,8 +388,9 @@ impl TerminalGuard {
     }
 }
 
-/// Loads `vaults[index]` and makes it active. Failures are shown in the status line and leave the
-/// current profile active; returns whether loading succeeded.
+/// Loads `vaults[index]` and makes it active. Failures are shown in the status
+/// line and leave the current profile active; returns whether loading
+/// succeeded.
 fn load_profile(
     terminal: &mut TerminalGuard,
     app: &mut PickerApp,
@@ -406,16 +407,16 @@ fn load_profile(
             app.store(index, items);
             app.activate(index)?;
             Ok(true)
-        }
+        },
         Err(error) => {
             app.set_error(error.to_string());
             Ok(false)
-        }
+        },
     }
 }
 
-/// Runs `op` against `vault`. A locked vault is unlocked first with the terminal handed back,
-/// since pinentry prompts on it.
+/// Runs `op` against `vault`. A locked vault is unlocked first with the
+/// terminal handed back, since pinentry prompts on it.
 fn with_unlocked_terminal<T, E>(
     terminal: &mut TerminalGuard,
     vault: &Rbw,
@@ -491,7 +492,7 @@ impl PickerApp {
                 FormOutcome::Cancel => {
                     self.form = None;
                     KeyOutcome::Continue
-                }
+                },
                 FormOutcome::Submit => KeyOutcome::SaveForm,
             });
         }
@@ -501,17 +502,17 @@ impl PickerApp {
                 KeyCode::Char('n') => {
                     self.form = Some(Form::new_login());
                     return Ok(KeyOutcome::Continue);
-                }
+                },
                 KeyCode::Char('e') => {
-                    return Ok(match self.filtered.get(self.selected).copied() {
-                        Some(index) => KeyOutcome::Edit(index),
-                        None => {
+                    return Ok(self.filtered.get(self.selected).copied().map_or_else(
+                        || {
                             self.set_error("No item selected to edit".to_owned());
                             KeyOutcome::Continue
-                        }
-                    });
-                }
-                _ => {}
+                        },
+                        KeyOutcome::Edit,
+                    ));
+                },
+                _ => {},
             }
         }
 
@@ -525,13 +526,13 @@ impl PickerApp {
                     return Ok(KeyOutcome::Cancel);
                 }
                 self.refresh()?;
-            }
+            },
             KeyCode::Tab if self.profile_names.len() > 1 => {
                 return Ok(KeyOutcome::SwitchProfile(1));
-            }
+            },
             KeyCode::BackTab if self.profile_names.len() > 1 => {
                 return Ok(KeyOutcome::SwitchProfile(-1));
-            }
+            },
             KeyCode::Up => self.move_selection(-1),
             KeyCode::Down => self.move_selection(1),
             KeyCode::PageUp => self.move_selection(-10),
@@ -539,33 +540,33 @@ impl PickerApp {
             KeyCode::Home => self.selected = 0,
             KeyCode::End if !self.filtered.is_empty() => {
                 self.selected = self.filtered.len() - 1;
-            }
+            },
             KeyCode::Left => self.input.move_left(),
             KeyCode::Right => self.input.move_right(),
             KeyCode::Enter => {
                 let action = default_action(self.current_item(), self.fixed_action);
                 return Ok(self.confirm(action));
-            }
+            },
             KeyCode::Backspace if key.modifiers.contains(KeyModifiers::ALT) => {
                 if self.input.delete_word_before() {
                     self.refresh()?;
                 }
-            }
+            },
             KeyCode::Backspace => {
                 if self.input.delete_before() {
                     self.refresh()?;
                 }
-            }
+            },
             KeyCode::Delete => {
                 if self.input.delete_at() {
                     self.refresh()?;
                 }
-            }
+            },
             KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::ALT) => {
                 self.input.insert(ch);
                 self.refresh()?;
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
         Ok(KeyOutcome::Continue)
@@ -579,23 +580,23 @@ impl PickerApp {
                     self.refresh()?;
                 }
                 return Ok(KeyOutcome::Continue);
-            }
+            },
             KeyCode::Char('a') => {
                 self.input.move_start();
                 return Ok(KeyOutcome::Continue);
-            }
+            },
             KeyCode::Char('e') => {
                 self.input.move_end();
                 return Ok(KeyOutcome::Continue);
-            }
+            },
             KeyCode::Char('r') => return Ok(KeyOutcome::Reload),
             KeyCode::Char('k') => {
                 if self.input.kill_to_end() {
                     self.refresh()?;
                 }
                 return Ok(KeyOutcome::Continue);
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
         let action = match key.code {
@@ -607,20 +608,17 @@ impl PickerApp {
             _ => None,
         };
 
-        match action {
-            Some(action) => Ok(self.confirm(action)),
-            None => Ok(KeyOutcome::Continue),
-        }
+        Ok(action.map_or(KeyOutcome::Continue, |action| self.confirm(action)))
     }
 
     fn confirm(&mut self, action: CopyField) -> KeyOutcome {
-        match self.filtered.get(self.selected).copied() {
-            Some(index) => KeyOutcome::Confirm(PendingAction { index, action }),
-            None => {
+        self.filtered.get(self.selected).copied().map_or_else(
+            || {
                 self.set_status("No matching item to select".to_owned());
                 KeyOutcome::Continue
-            }
-        }
+            },
+            |index| KeyOutcome::Confirm(PendingAction { index, action }),
+        )
     }
 
     fn move_selection(&mut self, delta: isize) {
@@ -629,9 +627,9 @@ impl PickerApp {
             return;
         }
 
-        let last = self.filtered.len().saturating_sub(1) as isize;
-        let next = (self.selected as isize + delta).clamp(0, last);
-        self.selected = next as usize;
+        let last = self.filtered.len().saturating_sub(1).cast_signed();
+        let next = (self.selected.cast_signed() + delta).clamp(0, last);
+        self.selected = next.cast_unsigned();
     }
 
     fn items(&self) -> &[VaultItem] {
@@ -680,19 +678,7 @@ impl PickerApp {
             .and_then(|index| self.items().get(*index))
     }
 
-    fn draw(&mut self, frame: &mut ratatui::Frame<'_>) {
-        let outer = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(4),
-                Constraint::Length(3),
-                Constraint::Min(10),
-                Constraint::Length(1),
-            ])
-            .split(frame.area());
-
-        let action_label = default_action(self.current_item(), self.fixed_action).label();
-
+    fn draw_header(&self, frame: &mut ratatui::Frame<'_>, area: Rect, action_label: &str) {
         let header = Paragraph::new(vec![
             Line::from(vec![
                 Span::raw(" "),
@@ -744,33 +730,10 @@ impl PickerApp {
                 .border_style(Style::default().fg(Color::Blue))
                 .title(" Overview "),
         );
-        frame.render_widget(header, outer[0]);
+        frame.render_widget(header, area);
+    }
 
-        let search_area = outer[1];
-        self.search_area = Some(search_area);
-
-        let cursor_column = self.input.cursor_column();
-        let scroll = cursor_column.saturating_sub(search_area.width.saturating_sub(3));
-
-        let search = Paragraph::new(self.input.text()).scroll((0, scroll)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_set(border::ROUNDED)
-                .border_style(Style::default().fg(Color::Magenta))
-                .title(" Search ")
-                .title_bottom(Line::from("Esc clears, then quits")),
-        );
-        frame.render_widget(search, search_area);
-
-        let cursor_x = search_area.x + 1 + cursor_column - scroll;
-        let cursor_y = search_area.y + 1;
-        frame.set_cursor_position(Position::new(cursor_x, cursor_y));
-
-        let middle = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
-            .split(outer[2]);
-
+    fn draw_list(&mut self, frame: &mut ratatui::Frame<'_>, area: Rect, action_label: &str) {
         let items = if self.filtered.is_empty() {
             vec![ListItem::new(Line::from("No results"))]
         } else {
@@ -804,14 +767,57 @@ impl PickerApp {
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("❯ ");
-        frame.render_stateful_widget(list, middle[0], &mut self.list_state);
+        frame.render_stateful_widget(list, area, &mut self.list_state);
+    }
+
+    fn draw(&mut self, frame: &mut ratatui::Frame<'_>) {
+        let outer = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(4),
+                Constraint::Length(3),
+                Constraint::Min(10),
+                Constraint::Length(1),
+            ])
+            .split(frame.area());
+
+        let action_label = default_action(self.current_item(), self.fixed_action).label();
+
+        self.draw_header(frame, outer[0], action_label);
+
+        let search_area = outer[1];
+        self.search_area = Some(search_area);
+
+        let cursor_column = self.input.cursor_column();
+        let scroll = cursor_column.saturating_sub(search_area.width.saturating_sub(3));
+
+        let search = Paragraph::new(self.input.text()).scroll((0, scroll)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_set(border::ROUNDED)
+                .border_style(Style::default().fg(Color::Magenta))
+                .title(" Search ")
+                .title_bottom(Line::from("Esc clears, then quits")),
+        );
+        frame.render_widget(search, search_area);
+
+        let cursor_x = search_area.x + 1 + cursor_column - scroll;
+        let cursor_y = search_area.y + 1;
+        frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+
+        let middle = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
+            .split(outer[2]);
+
+        self.draw_list(frame, middle[0], action_label);
 
         let help_lines = render_help(action_label, self.verb, self.profile_names.len() > 1);
         let right = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(8),
-                Constraint::Length(help_lines.len() as u16 + 2),
+                Constraint::Length(u16::try_from(help_lines.len()).unwrap_or(u16::MAX) + 2),
             ])
             .split(middle[1]);
 
@@ -880,7 +886,8 @@ fn searchable_text(item: &VaultItem) -> String {
     )
 }
 
-/// What Enter copies: `--field` if given, otherwise the password, or the text of a secure note.
+/// What Enter copies: `--field` if given, otherwise the password, or the text
+/// of a secure note.
 fn default_action(item: Option<&VaultItem>, fixed_action: Option<CopyField>) -> CopyField {
     match (fixed_action, item.map(|item| item.kind)) {
         (Some(action), _) => action,
@@ -984,7 +991,8 @@ fn render_details(
     ]
 }
 
-// Lines stay within 33 columns so the pane does not wrap on an 80-column terminal.
+// Lines stay within 33 columns so the pane does not wrap on an 80-column
+// terminal.
 fn render_help(
     action_label: &str,
     verb: ActionVerb,
